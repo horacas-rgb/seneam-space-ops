@@ -38,13 +38,24 @@ def cargar_bases_datos():
             df_sector.columns = df_sector.columns.str.strip()
             dict_espacio[sheet] = df_sector.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
         
-    # D. Flights
-    df_vuelos = pd.read_excel("ROCKET_28_SEPT_2026.xlsx")
+    # D. Flights & Timeline
+    xls_vuelos = pd.ExcelFile("ROCKET_28_SEPT_2026.xlsx")
+    df_vuelos = pd.read_excel(xls_vuelos, sheet_name="ROCKET_28_SEPT_2026")
     df_vuelos.columns = df_vuelos.columns.str.strip()
     df_vuelos['entry_hour'] = pd.to_datetime(df_vuelos['entry_hour'])
     df_vuelos['exit_hour'] = pd.to_datetime(df_vuelos['exit_hour'])
     
-    return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos
+    # Leer eventos del Timeline a prueba de errores
+    df_timeline = None
+    if "Timeline" in xls_vuelos.sheet_names:
+        df_timeline = pd.read_excel(xls_vuelos, sheet_name="Timeline")
+        # Estandarizar columnas a minúsculas y reemplazar espacios por guiones bajos
+        df_timeline.columns = df_timeline.columns.str.strip().str.lower().str.replace(' ', '_')
+        
+        if 'hora_utc' in df_timeline.columns:
+            df_timeline['hora_utc'] = pd.to_datetime(df_timeline['hora_utc'])
+    
+    return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos, df_timeline
 
 def decodificar_coordenada_ruta(string_punto):
     match = re.match(r'^(\d{2})(\d{2})[Nn](\d{3})(\d{2})[Ww]$', str(string_punto).strip())
@@ -54,7 +65,7 @@ def decodificar_coordenada_ruta(string_punto):
         return lat, lon
     return None
 
-df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos = cargar_bases_datos()
+df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline = cargar_bases_datos()
 
 # --- MAIN INTERFACE HEADER ---
 col1, col2 = st.columns([5, 1])
@@ -75,7 +86,6 @@ operacion = st.selectbox(
 )
 
 if operacion == "Upcoming launches...":
-    # --- EXECUTIVE UPCOMING LAUNCH SCREEN ---
     st.markdown("<br><br>", unsafe_allow_html=True)
     st.markdown(
         """
@@ -96,16 +106,16 @@ if operacion == "Upcoming launches...":
 
 elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
     
-    # --- SIDEBAR CONTROL PANEL ---
+    # --- SIDEBAR CONTROL PANEL (Default Settings Updated) ---
     st.sidebar.title("🎛️ Map Control Panel")
     st.sidebar.markdown("Enable or disable layers to visualize:")
 
     st.sidebar.markdown("**Airspace & Control Centers**")
     mostrar_firs = st.sidebar.checkbox("Mexico FIR, Mazatlan Oceanic FIR", value=True)
-    mostrar_acc_mid = st.sidebar.checkbox("Merida Control Center (MMID ACC)", value=True)
-    mostrar_acc_mty = st.sidebar.checkbox("Monterrey Control Center (MMTY ACC)", value=True)
-    mostrar_acc_mex = st.sidebar.checkbox("Mexico Control Center (MMEX ACC)", value=True)
-    mostrar_acc_mzt = st.sidebar.checkbox("Mazatlan Control Center (MMZT ACC)", value=True)
+    mostrar_acc_mid = st.sidebar.checkbox("Merida Control Center (MMID ACC)", value=False)
+    mostrar_acc_mty = st.sidebar.checkbox("Monterrey Control Center (MMTY ACC)", value=False)
+    mostrar_acc_mex = st.sidebar.checkbox("Mexico Control Center (MMEX ACC)", value=False)
+    mostrar_acc_mzt = st.sidebar.checkbox("Mazatlan Control Center (MMZT ACC)", value=False)
 
     st.sidebar.markdown("**Space Launch Hazard Areas**")
     mostrar_tfr = st.sidebar.checkbox("TFR: Temporary Flight Restriction", value=True)
@@ -114,8 +124,22 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
     mostrar_10_7 = st.sidebar.checkbox("10^-7 Area MMFR", value=True)
 
     st.sidebar.markdown("**Flight Data**")
-    mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=True)
-    mostrar_waypoints = st.sidebar.checkbox("Waypoints and VORs", value=False)
+    mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=False)
+    mostrar_waypoints = st.sidebar.checkbox("Waypoints and VORs", value=True)
+
+    # Cuadro informativo de eventos (Timeline)
+    if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeline.columns:
+        st.markdown(
+            """
+            <div style="background-color: #1F2937; padding: 15px; border-radius: 10px; border: 1px solid #374151; margin-bottom: 20px;">
+                <h4 style="color: #39FF14; margin-top: 0;">⏱️ Critical Timeline Events (UTC)</h4>
+                <ul style="color: #E5E7EB; font-size: 0.95rem; margin-bottom: 0;">
+            """, unsafe_allow_html=True
+        )
+        for _, fila in df_timeline.iterrows():
+            if 'evento' in df_timeline.columns:
+                st.markdown(f"<li><b>{fila['hora_utc'].strftime('%H:%M:%S')}</b> - {fila['evento']}</li>", unsafe_allow_html=True)
+        st.markdown("</ul></div>", unsafe_allow_html=True)
     
     esritiles = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
     esriattr = "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
@@ -153,7 +177,7 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
             ).add_to(capa_waypoints)
         capa_waypoints.add_to(m)
     
-    # LAYER 3: Hazard Areas (Custom Colors & White Text Labels)
+    # LAYER 3: Hazard Areas 
     capa_areas = folium.FeatureGroup(name="Space Hazard Areas")
     for area, datos in df_riesgo.groupby('Área / Hazard Zone'):
         area_str = str(area).upper()
@@ -199,8 +223,8 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
         
     capa_areas.add_to(m)
     
-    # FLIGHT TRAJECTORY PROCESSING (With Aircraft Position Icons and Progressive Lines)
-    features_vuelos = []
+    # TIMESTAMPED GEOJSON: FLIGHTS & TIMELINE EVENTS
+    features_geojson = []
     
     if mostrar_rutas:
         capa_rutas = folium.FeatureGroup(name="Static Trajectories")
@@ -221,7 +245,6 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
                 
         n_pts = len(puntos_validos)
         if n_pts > 1:
-            # Static background route
             if mostrar_rutas:
                 coords_estaticas = [[lat, lon] for lat, lon in puntos_validos]
                 folium.PolyLine(
@@ -245,11 +268,10 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
                 etiqueta_click = (
                     f"<b>Callsign:</b> {vuelo['callsign']}<br>"
                     f"<b>ADEP-ADES:</b> {vuelo['adep']} - {vuelo['ades']}<br>"
-                    f"<b>Track Time:</b> {t_current.strftime('%H:%M')} UTC"
+                    f"<b>Track Time:</b> {t_current.strftime('%H:%M:%S')} UTC"
                 )
                 
-                # 1. Progressive Line Feature (Present & Future)
-                features_vuelos.append({
+                features_geojson.append({
                     "type": "Feature",
                     "geometry": {
                         "type": "LineString",
@@ -262,9 +284,8 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
                     }
                 })
                 
-                # 2. Small Aircraft Position Icon (Green Dot with White Border)
                 lat_i, lon_i = puntos_validos[i]
-                features_vuelos.append({
+                features_geojson.append({
                     "type": "Feature",
                     "geometry": {
                         "type": "Point",
@@ -274,23 +295,46 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
                         "times": [int(t1_shift.timestamp() * 1000), int(t2_shift.timestamp() * 1000)],
                         "icon": "circle",
                         "iconstyle": {
-                            "fillColor": "#39FF14",
-                            "fillOpacity": 1.0,
-                            "stroke": "true",
-                            "color": "#FFFFFF",
-                            "weight": 1,
-                            "radius": 5
+                            "fillColor": "#39FF14", "fillOpacity": 1.0, "stroke": "true",
+                            "color": "#FFFFFF", "weight": 1, "radius": 5
                         },
                         "popup": etiqueta_click
                     }
                 })
-            
+                
     if mostrar_rutas:
         capa_rutas.add_to(m)
 
-    # TIMELAPSE PLAYER
+    # 2. Timeline Events (Textos Flotantes Sincronizados)
+    if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeline.columns:
+        lat_text, lon_text = 25.8, -95.0 
+        for _, fila in df_timeline.iterrows():
+            if pd.notnull(fila.get('hora_utc')) and 'evento' in df_timeline.columns:
+                t_evento = fila['hora_utc']
+                t_evento_shift = t_evento + timedelta(hours=AJUSTE_UTC)
+                
+                t_fin_shift = t_evento_shift + timedelta(minutes=2)
+                
+                html_evento = f'<div style="font-size: 14pt; color: white; font-weight: bold; background-color: rgba(255,0,0,0.6); padding: 5px; border-radius: 5px; text-align: center; white-space: nowrap;">⚠️ {fila["evento"]}</div>'
+                
+                features_geojson.append({
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [lon_text, lat_text]
+                    },
+                    "properties": {
+                        "times": [int(t_evento_shift.timestamp() * 1000), int(t_fin_shift.timestamp() * 1000)],
+                        "icon": "circle",
+                        "iconstyle": {"radius": 0, "fillOpacity": 0, "stroke": "false"}, 
+                        "popup": html_evento,
+                        "tooltip": fila['evento'],
+                    }
+                })
+
+    # TIMELAPSE PLAYER (transición de 500ms = ~2 FPS)
     TimestampedGeoJson(
-        {"type": "FeatureCollection", "features": features_vuelos},
+        {"type": "FeatureCollection", "features": features_geojson},
         period="PT1M",
         add_last_point=False,
         auto_play=True,
@@ -298,6 +342,7 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
         max_speed=5,
         loop_button=True,
         time_slider_drag_update=True,
+        transition_time=500,
     ).add_to(m)
 
     st_folium(m, width=1400, height=750, returned_objects=[])
