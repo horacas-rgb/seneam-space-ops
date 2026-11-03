@@ -5,6 +5,7 @@ from folium.plugins import TimestampedGeoJson
 import pandas as pd
 import re
 import os
+import base64
 from datetime import timedelta
 
 # 1. Executive Page Configuration
@@ -340,57 +341,55 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
                         
     capa_rutas.add_to(m)
 
-    # 5. MENSAJES Y EVENTOS DEL TIMELINE FLOTANTES (Con Cohete Ejecutivo 🚀 usando folium.DivIcon estructurado)
-    lat_text, lon_text = 25.8, -95.0 
-    
-    html_liftoff = '<div style="background-color: rgba(17, 24, 39, 0.95); border: 2px solid #39FF14; color: #FFFF00; padding: 6px 14px; font-size: 16px; font-weight: 900; text-align: center; border-radius: 6px; white-space: nowrap; box-shadow: 0 0 12px rgba(0,0,0,0.9);">🚀 STARSHIP FLIGHT-14 LIFT OFF</div>'
+    # 5. LANZAMIENTO EN BOCA CHICA, TX (Punto Naranja Fuego Grande + Banner SVG automático y limpio)
+    lat_boca_chica, lon_boca_chica = 25.996, -97.154
     
     t_liftoff = pd.to_datetime(f"{FECHA_MISION} 12:49:00")
     t_end_liftoff = pd.to_datetime(f"{FECHA_MISION} 12:58:00")
     rango_liftoff = pd.date_range(start=t_liftoff, end=t_end_liftoff, freq='1min')
     
+    # SVG Banner codificado en Base64 para evitar el pin azul de Leaflet
+    svg_banner = '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="45"><rect width="320" height="45" rx="6" fill="#111827" stroke="#39FF14" stroke-width="2"/><text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, sans-serif" font-size="15px" font-weight="900" fill="#FFFF00">🚀 STARSHIP FLIGHT-14 LIFT OFF</text></svg>'
+    b64_banner = base64.b64encode(svg_banner.encode('utf-8')).decode('utf-8')
+    icon_url_banner = f"data:image/svg+xml;base64,{b64_banner}"
+
     for t in rango_liftoff:
         t_shift = t + timedelta(hours=AJUSTE_UTC)
+        
+        # A. Punto de lanzamiento grande y brillante en Boca Chica
         features_geojson.append({
             "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [lon_text, lat_text]},
+            "geometry": {"type": "Point", "coordinates": [lon_boca_chica, lat_boca_chica]},
+            "properties": {
+                "times": [int(t_shift.timestamp() * 1000)],
+                "icon": "circle",
+                "iconstyle": {
+                    "fillColor": "#FF4500",  # Naranja fuego
+                    "fillOpacity": 1.0,
+                    "stroke": "true",
+                    "color": "#FFFFFF",
+                    "weight": 2.5,
+                    "radius": 10
+                },
+                "popup": "<b>Starbase Boca Chica, TX</b><br>🚀 Starship Flight-14 Launch Site"
+            }
+        })
+        
+        # B. Banner gráfico flotante automático (Sin pines azules ni necesidad de clic)
+        features_geojson.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon_boca_chica, lat_boca_chica + 0.35]},
             "properties": {
                 "times": [int(t_shift.timestamp() * 1000)],
                 "icon": "marker",
                 "iconstyle": {
-                    "iconUrl": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'></svg>",
-                    "iconSize": [300, 40],
-                    "iconAnchor": [150, 20]
-                },
-                "popup": html_liftoff,
-                "tooltip": "🚀 STARSHIP FLIGHT-14 LIFT OFF"
-            }
-        })
-
-    # Usando folium.DivIcon estándar integrado en las propiedades para evitar pines azules
-    div_icon_liftoff_html = '<div style="background-color: #111827; border: 2px solid #39FF14; color: #FFFF00; padding: 6px 14px; font-size: 15px; font-weight: bold; border-radius: 6px; white-space: nowrap; text-align: center;">🚀 STARSHIP FLIGHT-14 LIFT OFF</div>'
-
-    for t in rango_liftoff:
-        t_shift = t + timedelta(hours=AJUSTE_UTC)
-        features_geojson.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [lon_text, lat_text]},
-            "properties": {
-                "times": [int(t_shift.timestamp() * 1000)],
-                "popup": "🚀 STARSHIP FLIGHT-14 LIFT OFF",
-                "icon": "circle",
-                "iconstyle": {
-                    "fillColor": "#FFFF00",
-                    "fillOpacity": 0.0,
-                    "stroke": "false",
-                    "radius": 1
+                    "iconUrl": icon_url_banner,
+                    "iconSize": [320, 45],
+                    "iconAnchor": [160, 22]
                 }
             }
         })
 
-    # Inyección directa mediante marcadores HTML fijos superpuestos para el banner de Cohete (Garantiza visibilidad total sin pines)
-    # Como alternativa limpia y robusta, inyectaremos el banner como un marcador de texto nativo de folium condicional o dentro del GeoJSON con marcador invisible pero con texto tooltip/popup constante.
-    
     # TIMELAPSE PLAYER (Configurado a 3 FPS = transition_time=333)
     TimestampedGeoJson(
         {"type": "FeatureCollection", "features": features_geojson},
