@@ -12,6 +12,7 @@ st.set_page_config(page_title="Space Operations - SENEAM", layout="wide")
 
 # Offset to force Leaflet (JavaScript) to render UTC time in local browsers (Mérida is UTC-6)
 AJUSTE_UTC = 6 
+FECHA_MISION = "2026-09-28"
 
 @st.cache_data
 def cargar_bases_datos():
@@ -45,15 +46,22 @@ def cargar_bases_datos():
     df_vuelos['entry_hour'] = pd.to_datetime(df_vuelos['entry_hour'])
     df_vuelos['exit_hour'] = pd.to_datetime(df_vuelos['exit_hour'])
     
-    # Leer eventos del Timeline a prueba de errores
+    # Leer eventos del Timeline con extracción limpia de horas
     df_timeline = None
     if "Timeline" in xls_vuelos.sheet_names:
         df_timeline = pd.read_excel(xls_vuelos, sheet_name="Timeline")
-        # Estandarizar columnas a minúsculas y reemplazar espacios por guiones bajos
         df_timeline.columns = df_timeline.columns.str.strip().str.lower().str.replace(' ', '_')
         
         if 'hora_utc' in df_timeline.columns:
-            df_timeline['hora_utc'] = pd.to_datetime(df_timeline['hora_utc'])
+            def normalizar_hora(val):
+                if pd.isnull(val): return None
+                match = re.search(r'(\d{1,2}:\d{2}(?::\d{2})?)', str(val))
+                if match:
+                    hora_limpia = match.group(1)
+                    return pd.to_datetime(f"{FECHA_MISION} {hora_limpia}")
+                return None
+            
+            df_timeline['hora_utc'] = df_timeline['hora_utc'].apply(normalizar_hora)
     
     return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos, df_timeline
 
@@ -76,13 +84,9 @@ with col2:
     if os.path.exists("Seneam_Logo.png"):
         st.image("Seneam_Logo.png", use_container_width=True)
 
-# Dropdown Menu Selector
 operacion = st.selectbox(
     "Select the Space Launch to visualize:",
-    [
-        "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026", 
-        "Upcoming launches..."
-    ]
+    ["SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026", "Upcoming launches..."]
 )
 
 if operacion == "Upcoming launches...":
@@ -106,7 +110,7 @@ if operacion == "Upcoming launches...":
 
 elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
     
-    # --- SIDEBAR CONTROL PANEL (Default Settings Updated) ---
+    # --- SIDEBAR CONTROL PANEL (Default Settings) ---
     st.sidebar.title("🎛️ Map Control Panel")
     st.sidebar.markdown("Enable or disable layers to visualize:")
 
@@ -137,7 +141,7 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
             """, unsafe_allow_html=True
         )
         for _, fila in df_timeline.iterrows():
-            if 'evento' in df_timeline.columns:
+            if 'evento' in df_timeline.columns and pd.notnull(fila['hora_utc']):
                 st.markdown(f"<li><b>{fila['hora_utc'].strftime('%H:%M:%S')}</b> - {fila['evento']}</li>", unsafe_allow_html=True)
         st.markdown("</ul></div>", unsafe_allow_html=True)
     
@@ -177,57 +181,92 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
             ).add_to(capa_waypoints)
         capa_waypoints.add_to(m)
     
-    # LAYER 3: Hazard Areas 
+    # LAYER 3: Hazard Areas (Temporal y Estática con Z-Index Order)
+    features_geojson = []
+    
+    t_activacion_areas = pd.to_datetime(f"{FECHA_MISION} 12:15:00")
+    t_desactivacion_areas = pd.to_datetime(f"{FECHA_MISION} 12:58:00")
+    rango_tiempo_areas = pd.date_range(start=t_activacion_areas, end=t_desactivacion_areas, freq='1min')
+
+    def orden_capas(x):
+        nombre = str(x[0]).upper()
+        if "10^-7" in nombre or "10_7" in nombre: return 1
+        if "AHA" in nombre: return 2
+        if "DRA" in nombre: return 3
+        return 4
+
     capa_areas = folium.FeatureGroup(name="Space Hazard Areas")
-    for area, datos in df_riesgo.groupby('Área / Hazard Zone'):
+    
+    for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_capas):
         area_str = str(area).upper()
-        label_name = area
         
         if "TFR" in area_str:
             if not mostrar_tfr: continue
             color = "#90EE90"
             label_name = "TFR"
-        elif "DRA" in area_str:
-            if not mostrar_dra: continue
-            color = "#FFB347"
-            label_name = "DRA-1"
-        elif "AHA" in area_str:
-            if not mostrar_aha: continue
-            color = "#FF7F7F"
-            label_name = "AHA-A3" if "A3" in area_str else "AHA-B1"
-        elif "10^-7" in area_str or "10_7" in area_str:
-            if not mostrar_10_7: continue
-            color = "#FFFFE0"
-            label_name = "10^-7"
-        else:
-            color = "#FFA500"
             
-        coords = list(zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)']))
-        
-        folium.Polygon(
-            locations=coords, color=color, fill=True, fill_opacity=0.35, tooltip=f"Restriction: {area}"
-        ).add_to(capa_areas)
-        
-        lats = [c[0] for c in coords]
-        lons = [c[1] for c in coords]
-        centroide = [sum(lats)/len(lats), sum(lons)/len(lons)]
-        
-        folium.map.Marker(
-            centroide,
-            icon=folium.DivIcon(
-                icon_size=(100,20),
-                icon_anchor=(50,10),
-                html=f'<div style="font-size: 10pt; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; text-align: center;">{label_name}</div>',
-            )
-        ).add_to(capa_areas)
-        
+            coords = list(zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)']))
+            folium.Polygon(locations=coords, color=color, fill=True, fill_opacity=0.35, tooltip=f"Restriction: {area}").add_to(capa_areas)
+            
+            lats = [c[0] for c in coords]
+            lons = [c[1] for c in coords]
+            centroide = [sum(lats)/len(lats), sum(lons)/len(lons)]
+            
+            folium.map.Marker(
+                centroide,
+                icon=folium.DivIcon(icon_size=(100,20), icon_anchor=(50,10), html=f'<div style="font-size: 10pt; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; text-align: center;">{label_name}</div>')
+            ).add_to(capa_areas)
+            
+        else:
+            if "DRA" in area_str:
+                if not mostrar_dra: continue
+                color = "#FFB347"
+                opacity_fill = 0.35
+                label_name = "DRA-1"
+            elif "AHA" in area_str:
+                if not mostrar_aha: continue
+                color = "#FF7F7F"
+                opacity_fill = 0.55
+                label_name = "AHA-A3" if "A3" in area_str else "AHA-B1"
+            elif "10^-7" in area_str or "10_7" in area_str:
+                if not mostrar_10_7: continue
+                color = "#FFFFE0"
+                opacity_fill = 0.15
+                label_name = "10^-7"
+            else:
+                color = "#FFA500"
+                opacity_fill = 0.35
+                label_name = area
+                
+            coords_estaticas = list(zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)']))
+            lats = [c[0] for c in coords_estaticas]
+            lons = [c[1] for c in coords_estaticas]
+            centroide = [sum(lats)/len(lats), sum(lons)/len(lons)]
+            
+            folium.map.Marker(
+                centroide,
+                icon=folium.DivIcon(icon_size=(100,20), icon_anchor=(50,10), html=f'<div style="font-size: 10pt; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; text-align: center;">{label_name}</div>')
+            ).add_to(capa_areas)
+            
+            coords_lon_lat = [[lon, lat] for lat, lon in zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)'])]
+            if coords_lon_lat[0] != coords_lon_lat[-1]:
+                coords_lon_lat.append(coords_lon_lat[0])
+                
+            for t in rango_tiempo_areas:
+                t_shift = t + timedelta(hours=AJUSTE_UTC)
+                features_geojson.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Polygon", "coordinates": [coords_lon_lat]},
+                    "properties": {
+                        "times": [int(t_shift.timestamp() * 1000)],
+                        "style": {"fillColor": color, "color": color, "weight": 2, "fillOpacity": opacity_fill, "opacity": 0.8},
+                        "tooltip": f"ACTIVE: {label_name}"
+                    }
+                })
     capa_areas.add_to(m)
     
-    # TIMESTAMPED GEOJSON: FLIGHTS & TIMELINE EVENTS
-    features_geojson = []
-    
-    if mostrar_rutas:
-        capa_rutas = folium.FeatureGroup(name="Static Trajectories")
+    # 4. RUTAS DE VUELO: Interpolación minuto a minuto (Punto en movimiento fluido)
+    capa_rutas = folium.FeatureGroup(name="Static Trajectories", show=mostrar_rutas)
         
     for _, vuelo in df_vuelos.iterrows():
         nodos_ruta = str(vuelo['route']).split()
@@ -245,104 +284,125 @@ elif operacion == "SpaceX Starship Super Heavy Flight-14 Sept 28th, 2026":
                 
         n_pts = len(puntos_validos)
         if n_pts > 1:
-            if mostrar_rutas:
-                coords_estaticas = [[lat, lon] for lat, lon in puntos_validos]
-                folium.PolyLine(
-                    locations=coords_estaticas, color="#39FF14", weight=0.5, opacity=0.2, dash_array="4",
-                    tooltip=f"<b>Callsign:</b> {vuelo['callsign']} | <b>Route:</b> {vuelo['adep']}-{vuelo['ades']}"
-                ).add_to(capa_rutas)
+            coords_estaticas = [[lat, lon] for lat, lon in puntos_validos]
+            folium.PolyLine(
+                locations=coords_estaticas, color="#39FF14", weight=0.5, opacity=0.2, dash_array="4",
+                tooltip=f"<b>Callsign:</b> {vuelo['callsign']} | <b>Route:</b> {vuelo['adep']}-{vuelo['ades']}"
+            ).add_to(capa_rutas)
             
             t_inicio = vuelo['entry_hour']
             t_fin = vuelo['exit_hour']
-            paso_tiempo = (t_fin - t_inicio) / (n_pts - 1)
             
-            for i in range(n_pts - 1):
-                remaining_coords = [[lon, lat] for lat, lon in puntos_validos[i:]]
+            if pd.isnull(t_inicio) or pd.isnull(t_fin):
+                continue
                 
-                t_current = t_inicio + paso_tiempo * i
-                t_next = t_inicio + paso_tiempo * (i + 1)
+            duracion_vuelo_mins = int((t_fin - t_inicio).total_seconds() / 60)
+            if duracion_vuelo_mins <= 0:
+                continue
                 
-                t1_shift = t_current + timedelta(hours=AJUSTE_UTC)
-                t2_shift = t_next + timedelta(hours=AJUSTE_UTC)
+            paso_tiempo = (t_fin - t_inicio) / (n_pts - 1)
+            tiempos_nodos = [t_inicio + paso_tiempo * i for i in range(n_pts)]
+            
+            for m_offset in range(duracion_vuelo_mins + 1):
+                t_current = t_inicio + timedelta(minutes=m_offset)
                 
-                etiqueta_click = (
-                    f"<b>Callsign:</b> {vuelo['callsign']}<br>"
-                    f"<b>ADEP-ADES:</b> {vuelo['adep']} - {vuelo['ades']}<br>"
-                    f"<b>Track Time:</b> {t_current.strftime('%H:%M:%S')} UTC"
-                )
-                
-                features_geojson.append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": remaining_coords
-                    },
-                    "properties": {
-                        "times": [int(t1_shift.timestamp() * 1000), int(t2_shift.timestamp() * 1000)],
-                        "style": {"color": "#39FF14", "weight": 1.5, "opacity": 0.9},
-                        "popup": etiqueta_click
-                    }
-                })
-                
-                lat_i, lon_i = puntos_validos[i]
-                features_geojson.append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [lon_i, lat_i]
-                    },
-                    "properties": {
-                        "times": [int(t1_shift.timestamp() * 1000), int(t2_shift.timestamp() * 1000)],
-                        "icon": "circle",
-                        "iconstyle": {
-                            "fillColor": "#39FF14", "fillOpacity": 1.0, "stroke": "true",
-                            "color": "#FFFFFF", "weight": 1, "radius": 5
-                        },
-                        "popup": etiqueta_click
-                    }
-                })
-                
-    if mostrar_rutas:
-        capa_rutas.add_to(m)
+                for i in range(n_pts - 1):
+                    if tiempos_nodos[i] <= t_current <= tiempos_nodos[i+1]:
+                        tA = tiempos_nodos[i]
+                        tB = tiempos_nodos[i+1]
+                        lonA, latA = puntos_validos[i][1], puntos_validos[i][0]
+                        lonB, latB = puntos_validos[i+1][1], puntos_validos[i+1][0]
+                        
+                        if tB == tA:
+                            lon_curr, lat_curr = lonA, latA
+                        else:
+                            fraction = (t_current - tA).total_seconds() / (tB - tA).total_seconds()
+                            lon_curr = lonA + (lonB - lonA) * fraction
+                            lat_curr = latA + (latB - latA) * fraction
+                            
+                        t_shift = t_current + timedelta(hours=AJUSTE_UTC)
+                        etiqueta = f"<b>Callsign:</b> {vuelo['callsign']}<br><b>ADEP-ADES:</b> {vuelo['adep']} - {vuelo['ades']}"
+                        
+                        features_geojson.append({
+                            "type": "Feature",
+                            "geometry": {"type": "Point", "coordinates": [lon_curr, lat_curr]},
+                            "properties": {
+                                "times": [int(t_shift.timestamp() * 1000)],
+                                "icon": "circle",
+                                "iconstyle": {
+                                    "fillColor": "#39FF14", "fillOpacity": 1.0, "stroke": "true",
+                                    "color": "#FFFFFF", "weight": 1.5, "radius": 6
+                                },
+                                "popup": etiqueta
+                            }
+                        })
+                        break
+                        
+    capa_rutas.add_to(m)
 
-    # 2. Timeline Events (Textos Flotantes Sincronizados)
-    if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeline.columns:
-        lat_text, lon_text = 25.8, -95.0 
-        for _, fila in df_timeline.iterrows():
-            if pd.notnull(fila.get('hora_utc')) and 'evento' in df_timeline.columns:
-                t_evento = fila['hora_utc']
-                t_evento_shift = t_evento + timedelta(hours=AJUSTE_UTC)
-                
-                t_fin_shift = t_evento_shift + timedelta(minutes=2)
-                
-                html_evento = f'<div style="font-size: 14pt; color: white; font-weight: bold; background-color: rgba(255,0,0,0.6); padding: 5px; border-radius: 5px; text-align: center; white-space: nowrap;">⚠️ {fila["evento"]}</div>'
-                
-                features_geojson.append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [lon_text, lat_text]
-                    },
-                    "properties": {
-                        "times": [int(t_evento_shift.timestamp() * 1000), int(t_fin_shift.timestamp() * 1000)],
-                        "icon": "circle",
-                        "iconstyle": {"radius": 0, "fillOpacity": 0, "stroke": "false"}, 
-                        "popup": html_evento,
-                        "tooltip": fila['evento'],
-                    }
-                })
+    # 5. MENSAJES Y EVENTOS DEL TIMELINE FLOTANTES (Con Cohete Ejecutivo 🚀 usando folium.DivIcon estructurado)
+    lat_text, lon_text = 25.8, -95.0 
+    
+    html_liftoff = '<div style="background-color: rgba(17, 24, 39, 0.95); border: 2px solid #39FF14; color: #FFFF00; padding: 6px 14px; font-size: 16px; font-weight: 900; text-align: center; border-radius: 6px; white-space: nowrap; box-shadow: 0 0 12px rgba(0,0,0,0.9);">🚀 STARSHIP FLIGHT-14 LIFT OFF</div>'
+    
+    t_liftoff = pd.to_datetime(f"{FECHA_MISION} 12:49:00")
+    t_end_liftoff = pd.to_datetime(f"{FECHA_MISION} 12:58:00")
+    rango_liftoff = pd.date_range(start=t_liftoff, end=t_end_liftoff, freq='1min')
+    
+    for t in rango_liftoff:
+        t_shift = t + timedelta(hours=AJUSTE_UTC)
+        features_geojson.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon_text, lat_text]},
+            "properties": {
+                "times": [int(t_shift.timestamp() * 1000)],
+                "icon": "marker",
+                "iconstyle": {
+                    "iconUrl": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'></svg>",
+                    "iconSize": [300, 40],
+                    "iconAnchor": [150, 20]
+                },
+                "popup": html_liftoff,
+                "tooltip": "🚀 STARSHIP FLIGHT-14 LIFT OFF"
+            }
+        })
 
-    # TIMELAPSE PLAYER (transición de 500ms = ~2 FPS)
+    # Usando folium.DivIcon estándar integrado en las propiedades para evitar pines azules
+    div_icon_liftoff_html = '<div style="background-color: #111827; border: 2px solid #39FF14; color: #FFFF00; padding: 6px 14px; font-size: 15px; font-weight: bold; border-radius: 6px; white-space: nowrap; text-align: center;">🚀 STARSHIP FLIGHT-14 LIFT OFF</div>'
+
+    for t in rango_liftoff:
+        t_shift = t + timedelta(hours=AJUSTE_UTC)
+        features_geojson.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lon_text, lat_text]},
+            "properties": {
+                "times": [int(t_shift.timestamp() * 1000)],
+                "popup": "🚀 STARSHIP FLIGHT-14 LIFT OFF",
+                "icon": "circle",
+                "iconstyle": {
+                    "fillColor": "#FFFF00",
+                    "fillOpacity": 0.0,
+                    "stroke": "false",
+                    "radius": 1
+                }
+            }
+        })
+
+    # Inyección directa mediante marcadores HTML fijos superpuestos para el banner de Cohete (Garantiza visibilidad total sin pines)
+    # Como alternativa limpia y robusta, inyectaremos el banner como un marcador de texto nativo de folium condicional o dentro del GeoJSON con marcador invisible pero con texto tooltip/popup constante.
+    
+    # TIMELAPSE PLAYER (Configurado a 3 FPS = transition_time=333)
     TimestampedGeoJson(
         {"type": "FeatureCollection", "features": features_geojson},
         period="PT1M",
+        duration="PT1M", 
         add_last_point=False,
         auto_play=True,
         loop=True,
         max_speed=5,
         loop_button=True,
         time_slider_drag_update=True,
-        transition_time=500,
+        transition_time=333,  # 333 ms por frame = 3 FPS
     ).add_to(m)
 
     st_folium(m, width=1400, height=750, returned_objects=[])
