@@ -30,16 +30,20 @@ def cargar_bases_datos(mision):
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
     
-    # --- INYECCIÓN DE VORS FALTANTES (REYNOSA, COLIMA Y TUXTLA GUTIERREZ TGZ) ---
+    # --- INYECCIÓN DE VORS FALTANTES (REYNOSA, COLIMA, TUXTLA, CJS, BCO, GYM, TTM) ---
     vores_faltantes = pd.DataFrame([
         {'Nombre del Punto / Waypoint': 'REYNOSA', 'Latitud (Decimal)': 26.0104, 'Longitud (Decimal)': -98.2285},
         {'Nombre del Punto / Waypoint': 'COLIMA', 'Latitud (Decimal)': 19.2770, 'Longitud (Decimal)': -103.5775},
-        {'Nombre del Punto / Waypoint': 'TUXTLA', 'Latitud (Decimal)': 16.5616, 'Longitud (Decimal)': -93.0257}
+        {'Nombre del Punto / Waypoint': 'TUXTLA', 'Latitud (Decimal)': 16.5616, 'Longitud (Decimal)': -93.0257},
+        {'Nombre del Punto / Waypoint': 'CIUDAD JUAREZ', 'Latitud (Decimal)': 31.6386, 'Longitud (Decimal)': -106.4344},
+        {'Nombre del Punto / Waypoint': 'CREEL', 'Latitud (Decimal)': 27.7490, 'Longitud (Decimal)': -107.6360},
+        {'Nombre del Punto / Waypoint': 'GUAYMAS', 'Latitud (Decimal)': 27.9653, 'Longitud (Decimal)': -110.9250},
+        {'Nombre del Punto / Waypoint': 'NORIA', 'Latitud (Decimal)': 26.3150, 'Longitud (Decimal)': -100.1200}
     ])
     df_wp = pd.concat([df_wp, vores_faltantes], ignore_index=True)
     # --------------------------------------------------------------------------
 
-    # Diccionario Oficial de VORs en México
+    # Diccionario Oficial de VORs en México (Actualizado)
     MAPA_VORS_MEXICO = {
         "TIJUANA": "TIJ", "MEXICALI": "MXL", "PEÑASCO": "PPE", "HERMOSILLO": "HMO",
         "OBREGON": "CEN", "OBREGÓN": "CEN", "LORETO": "LTO", "MOCHIS": "LMM",
@@ -57,7 +61,8 @@ def cargar_bases_datos(mision):
         "MONTERREY": "MTY", "SALTILLO": "SLW", "TORREON": "TRC", "TORREÓN": "TRC",
         "MONCLOVA": "MOV", "ALLENDE": "ALL", "CONCEPCION": "CDR", "CONCEPCIÓN": "CDR",
         "MATAMOROS": "MAM", "NUEVO LAREDO": "NLD", "REYNOSA": "REX", "COLIMA": "COL",
-        "POZA RICA": "PAZ", "TUXPAN": "TUX", "ESCONDIDO": "PXM", "TOLUCA": "TLC", "TUXTLA": "TGZ"
+        "POZA RICA": "PAZ", "TUXPAN": "TUX", "ESCONDIDO": "PXM", "TOLUCA": "TLC", "TUXTLA": "TGZ",
+        "CIUDAD JUAREZ": "CJS", "JUAREZ": "CJS", "CREEL": "BCO", "GUAYMAS": "GYM", "NORIA": "TTM"
     }
 
     def obtener_codigo(row):
@@ -72,8 +77,9 @@ def cargar_bases_datos(mision):
 
     def clasificar_punto(row):
         s = str(row['Nombre del Punto / Waypoint']).strip().upper()
+        # Verificar si coincide exactamente o parcialmente con el diccionario de VORs
         for k in MAPA_VORS_MEXICO.keys():
-            if k in s: return 'VOR / Radioayuda'
+            if k in s or s in k: return 'VOR / Radioayuda'
         if 'VOR' in s or 'NDB' in s or 'DME' in s or 'TACAN' in s or 'VORTAC' in s:
             return 'VOR / Radioayuda'
         return 'Waypoint'
@@ -288,7 +294,7 @@ except Exception as e:
         else:
             dict_espacio_procesado[nombre_hoja] = {'Sector': df_sheet}
 
-# LAYER 1: Airspace Boundaries
+# LAYER 1: Airspace Boundaries (SIN tooltips ruidosos al hacer clic en áreas vacías)
 capa_espacio = folium.FeatureGroup(name="Airspace Boundaries")
 for nombre_hoja, sectores in dict_espacio_procesado.items():
     is_fir = "FIR" in nombre_hoja
@@ -313,7 +319,7 @@ for nombre_hoja, sectores in dict_espacio_procesado.items():
         folium.Polygon(
             locations=coords, color=color_sector, weight=2.5 if es_perimetro else 1.2, opacity=0.7, fill=True, 
             fill_opacity=0.03 if es_perimetro else (0.06 if "OCEÁNICA" in nombre_hoja.upper() else 0.08), 
-            tooltip=f"Sector: {sector_name}"
+            interactive=False
         ).add_to(capa_espacio)
         
         if not es_perimetro and not is_fir:
@@ -475,7 +481,6 @@ for _, vuelo in df_vuelos.iterrows():
         paso_tiempo = (t_fin - t_inicio) / (n_pts - 1)
         tiempos_nodos = [t_inicio + paso_tiempo * i for i in range(n_pts)]
         
-        # Extracción de campos solicitados de ROCKET_28_SEPT_2026.xlsx
         callsign = vuelo.get('callsign', 'N/A')
         tipo_aeronave = vuelo.get('aircraft_type', 'N/A')
         adep = vuelo.get('adep', 'N/A')
@@ -487,7 +492,6 @@ for _, vuelo in df_vuelos.iterrows():
             nivel_str = "N/A"
         ruta_completa = vuelo.get('route', 'Directo / No especificada')
 
-        # Estructura de la ventana emergente solicitada
         popup_html = f"""
         <div style="font-family: Arial, sans-serif; font-size: 11px; width: 220px; color: #333;">
             <div style="background-color: #00FFFF; padding: 5px; text-align: center; font-weight: bold; color: #0c2340; border-radius: 3px 3px 0 0;">
