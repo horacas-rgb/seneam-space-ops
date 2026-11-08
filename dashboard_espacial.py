@@ -25,20 +25,21 @@ def cargar_bases_datos(mision):
         archivo_vuelos = "ROCKET_28_SEPT_2026.xlsx"
         fecha_mision = "2026-09-28"
 
-    # A. Waypoints
+    # A. Waypoints y VORs
     df_wp = pd.read_excel("Coordenadas_Waypoints_ENR_3.3.xlsx", sheet_name="Waypoints_Unicos", header=3)
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
     
-    # --- INYECCIÓN DE VORS FALTANTES (REYNOSA Y COLIMA) ---
+    # --- INYECCIÓN DE VORS FALTANTES (REYNOSA, COLIMA Y TUXTLA GUTIERREZ TGZ) ---
     vores_faltantes = pd.DataFrame([
         {'Nombre del Punto / Waypoint': 'REYNOSA', 'Latitud (Decimal)': 26.0104, 'Longitud (Decimal)': -98.2285},
-        {'Nombre del Punto / Waypoint': 'COLIMA', 'Latitud (Decimal)': 19.2770, 'Longitud (Decimal)': -103.5775}
+        {'Nombre del Punto / Waypoint': 'COLIMA', 'Latitud (Decimal)': 19.2770, 'Longitud (Decimal)': -103.5775},
+        {'Nombre del Punto / Waypoint': 'TUXTLA', 'Latitud (Decimal)': 16.5616, 'Longitud (Decimal)': -93.0257}
     ])
     df_wp = pd.concat([df_wp, vores_faltantes], ignore_index=True)
-    # -------------------------------------------------------
+    # --------------------------------------------------------------------------
 
-    # Diccionario Oficial de VORs en México para evitar nombres largos
+    # Diccionario Oficial de VORs en México
     MAPA_VORS_MEXICO = {
         "TIJUANA": "TIJ", "MEXICALI": "MXL", "PEÑASCO": "PPE", "HERMOSILLO": "HMO",
         "OBREGON": "CEN", "OBREGÓN": "CEN", "LORETO": "LTO", "MOCHIS": "LMM",
@@ -61,13 +62,10 @@ def cargar_bases_datos(mision):
 
     def obtener_codigo(row):
         s = str(row['Nombre del Punto / Waypoint']).strip().upper()
-        # 1. Si el código ya viene entre paréntesis ej. CHETUMAL(CTM)
         match = re.search(r'\(([A-Z]{3})\)', s)
         if match: return match.group(1)
-        # 2. Buscar en el diccionario oficial SENEAM
         for k in sorted(MAPA_VORS_MEXICO.keys(), key=len, reverse=True):
             if k in s: return MAPA_VORS_MEXICO[k]
-        # 3. Limpieza por defecto
         s_limpio = re.sub(r'\b(VOR|NDB|DME|TACAN|VORTAC|ILS)\b', '', s).strip()
         partes = s_limpio.split()
         return partes[0][:3] if partes else ""
@@ -354,7 +352,6 @@ if not df_waypoints.empty:
                 tooltip=f"VOR: {designador}"
             ).add_to(capa_navaids)
             
-            # Etiqueta visual de 3 letras
             folium.map.Marker(
                 [lat, lon],
                 icon=folium.DivIcon(
@@ -427,14 +424,11 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
         tiempos_activos = rango_launch
         
     coords_estaticas = list(zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)']))
-    
-    # Cálculo del centroide de las áreas (Ajuste específico para el área 10^-7)
     lats = [c[0] for c in coords_estaticas]
     lons = [c[1] for c in coords_estaticas]
     cent_lat = sum(lats)/len(lats)
     cent_lon = sum(lons)/len(lons)
     
-    # Ajuste para bajar la etiqueta de 10^-7 y centrarla mejor en el mapa
     if "10^-7" in label_name:
         cent_lat -= 0.6  
         
@@ -453,7 +447,7 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
         })
 capa_areas.add_to(m)
 
-# LAYER 4: RUTAS DE VUELO
+# LAYER 4: RUTAS DE VUELO Y POPUP DE AERONAVES
 capa_rutas = folium.FeatureGroup(name="Static Trajectories", show=mostrar_rutas)
 for _, vuelo in df_vuelos.iterrows():
     puntos_validos = []
@@ -481,6 +475,35 @@ for _, vuelo in df_vuelos.iterrows():
         paso_tiempo = (t_fin - t_inicio) / (n_pts - 1)
         tiempos_nodos = [t_inicio + paso_tiempo * i for i in range(n_pts)]
         
+        # Extracción de campos solicitados de ROCKET_28_SEPT_2026.xlsx
+        callsign = vuelo.get('callsign', 'N/A')
+        tipo_aeronave = vuelo.get('aircraft_type', 'N/A')
+        adep = vuelo.get('adep', 'N/A')
+        ades = vuelo.get('ades', 'N/A')
+        nivel_vuelo = vuelo.get('entry_level', vuelo.get('rfl', 'N/A'))
+        if pd.notna(nivel_vuelo):
+            nivel_str = f"FL{int(float(nivel_vuelo))}" if str(nivel_vuelo).replace('.','',1).isdigit() else str(nivel_vuelo)
+        else:
+            nivel_str = "N/A"
+        ruta_completa = vuelo.get('route', 'Directo / No especificada')
+
+        # Estructura de la ventana emergente solicitada
+        popup_html = f"""
+        <div style="font-family: Arial, sans-serif; font-size: 11px; width: 220px; color: #333;">
+            <div style="background-color: #00FFFF; padding: 5px; text-align: center; font-weight: bold; color: #0c2340; border-radius: 3px 3px 0 0;">
+                ✈️ {callsign}
+            </div>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 5px;">
+                <tr><td><b>Tipo Aeronave:</b></td><td>{tipo_aeronave}</td></tr>
+                <tr><td><b>ADEP - ADES:</b></td><td>{adep} - {ades}</td></tr>
+                <tr><td><b>Nivel de Vuelo:</b></td><td>{nivel_str}</td></tr>
+            </table>
+            <div style="margin-top: 6px; padding-top: 4px; border-top: 1px solid #ccc; font-size: 10px; word-wrap: break-word;">
+                <b>Ruta:</b> <span style="color: #05508a;">{ruta_completa}</span>
+            </div>
+        </div>
+        """
+
         for m_offset in range(duracion_vuelo_mins + 1):
             t_current = t_inicio + timedelta(minutes=m_offset)
             for i in range(n_pts - 1):
@@ -496,7 +519,12 @@ for _, vuelo in df_vuelos.iterrows():
                         
                     features_geojson.append({
                         "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_curr, lat_curr]},
-                        "properties": {"times": [int((t_current + timedelta(hours=AJUSTE_UTC)).timestamp() * 1000)], "icon": "circle", "iconstyle": {"fillColor": "#39FF14", "fillOpacity": 1.0, "stroke": "true", "color": "#FFFFFF", "weight": 1.5, "radius": 6}, "popup": f"<b>Callsign:</b> {vuelo['callsign']}<br><b>ADEP-ADES:</b> {vuelo['adep']} - {vuelo['ades']}"}
+                        "properties": {
+                            "times": [int((t_current + timedelta(hours=AJUSTE_UTC)).timestamp() * 1000)], 
+                            "icon": "circle", 
+                            "iconstyle": {"fillColor": "#39FF14", "fillOpacity": 1.0, "stroke": "true", "color": "#FFFFFF", "weight": 1.5, "radius": 6}, 
+                            "popup": popup_html
+                        }
                     })
                     break
 capa_rutas.add_to(m)
