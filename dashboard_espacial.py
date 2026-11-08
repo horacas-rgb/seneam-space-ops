@@ -42,12 +42,21 @@ def cargar_bases_datos(mision):
     ])
     df_wp = pd.concat([df_wp, vores_faltantes], ignore_index=True)
 
-    # B. Aerovías
+    # B. Aerovías / Rutas RNAV y ATS
     try:
-        df_aerovias = pd.read_excel("Coordenadas_Waypoints_ENR_3.3.xlsx", sheet_name="Aerovias_Waypoints")
-        df_aerovias.columns = df_aerovias.columns.str.strip()
+        df_rnav = pd.read_excel("Coordenadas_Waypoints_ENR_3.3.xlsx", sheet_name="Aerovias_Waypoints")
     except Exception:
-        df_aerovias = pd.DataFrame()
+        df_rnav = pd.DataFrame()
+        
+    try:
+        df_ats_hi = pd.read_excel("Coordenadas_Waypoints_ENR_3.2.xlsx", sheet_name="Rutas ATS EAS")
+    except Exception:
+        df_ats_hi = pd.DataFrame()
+
+    try:
+        df_ats_low = pd.read_excel("Coordenadas_Waypoints_ENR_3.1.xlsx", sheet_name="Rutas ATS EAI")
+    except Exception:
+        df_ats_low = pd.DataFrame()
 
     # Diccionario Oficial de VORs en México (Actualizado)
     MAPA_VORS_MEXICO = {
@@ -97,7 +106,7 @@ def cargar_bases_datos(mision):
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
     ).to_dict()
     
-    # B. Hazard Areas
+    # C. Hazard Areas
     df_areas = pd.read_excel(archivo_areas, sheet_name="Consolidado_Areas", header=3)
     df_areas.columns = df_areas.columns.str.strip()
     df_areas = df_areas.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
@@ -118,7 +127,7 @@ def cargar_bases_datos(mision):
         except Exception:
             pass
     
-    # C. Espacio Aéreo SENEAM
+    # D. Espacio Aéreo SENEAM
     xls_espacio = pd.ExcelFile("Coordenadas_Espacio_Aereo_SENEAM.xlsx")
     dict_espacio = {}
     for sheet in xls_espacio.sheet_names:
@@ -127,7 +136,7 @@ def cargar_bases_datos(mision):
             df_sector.columns = df_sector.columns.str.strip()
             dict_espacio[sheet] = df_sector.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
         
-    # D. Vuelos y Línea de Tiempo
+    # E. Vuelos y Línea de Tiempo
     xls_vuelos = pd.ExcelFile(archivo_vuelos)
     df_vuelos = pd.read_excel(xls_vuelos, sheet_name=xls_vuelos.sheet_names[0])
     df_vuelos.columns = df_vuelos.columns.str.strip()
@@ -157,7 +166,7 @@ def cargar_bases_datos(mision):
                 return None
             df_timeline['hora_utc'] = df_timeline.apply(normalizar_hora, axis=1)
     
-    return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos, df_timeline, df_aerovias
+    return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low
 
 def decodificar_coordenada_ruta(string_punto):
     match = re.match(r'^(\d{2})(\d{2})[Nn](\d{3})(\d{2})[Ww]$', str(string_punto).strip())
@@ -165,6 +174,46 @@ def decodificar_coordenada_ruta(string_punto):
         return (int(match.group(1)) + int(match.group(2)) / 60.0, 
                 -(int(match.group(3)) + int(match.group(4)) / 60.0))
     return None
+
+def agregar_capa_rutas(df_rutas, capa, color_base, prefijo_tooltip, dicc_wp):
+    if df_rutas is not None and not df_rutas.empty:
+        df_rutas.columns = df_rutas.columns.str.strip()
+        col_aerovia = df_rutas.columns[0]
+        
+        for nombre_aerovía, grupo in df_rutas.groupby(col_aerovia):
+            puntos_aerovia = []
+            for _, row in grupo.iterrows():
+                lat, lon = None, None
+                for c in grupo.columns:
+                    if 'lat' in c.lower(): lat = row[c]
+                    if 'lon' in c.lower() or 'lng' in c.lower(): lon = row[c]
+                
+                if pd.notnull(lat) and pd.notnull(lon):
+                    puntos_aerovia.append((float(lat), float(lon)))
+                else:
+                    for c in grupo.columns:
+                        val_str = str(row[c]).strip()
+                        if val_str in dicc_wp:
+                            puntos_aerovia.append(dicc_wp[val_str])
+                            break
+            
+            if len(puntos_aerovia) > 1:
+                estilo_base = {"color": color_base, "weight": 0.8, "opacity": 0.6}
+                estilo_hover = {"color": "#39FF14", "weight": 2.5, "opacity": 1.0}
+                
+                folium.GeoJson(
+                    {
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "LineString",
+                            "coordinates": [[lon, lat] for lat, lon in puntos_aerovia]
+                        },
+                        "properties": {"name": str(nombre_aerovía)}
+                    },
+                    style_function=lambda x, estilo=estilo_base: estilo,
+                    highlight_function=lambda x, estilo=estilo_hover: estilo,
+                    tooltip=folium.GeoJsonTooltip(fields=["name"], aliases=[f"{prefijo_tooltip}: "], sticky=True)
+                ).add_to(capa)
 
 # --- MAIN INTERFACE HEADER ---
 col1, col2 = st.columns([5, 1])
@@ -187,7 +236,7 @@ if operacion == "Upcoming launches...":
     st.stop()
 
 # --- CARGA DINÁMICA DE DATOS ---
-df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_aerovias = cargar_bases_datos(operacion)
+df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low = cargar_bases_datos(operacion)
 
 st.sidebar.title("🎛️ Map Control Panel")
 st.sidebar.markdown("### Airspace Layers")
@@ -210,7 +259,9 @@ else:
 mostrar_10_7 = st.sidebar.checkbox("10^-7 Area MMFR", value=True)
 
 st.sidebar.markdown("### Flight Data & Navigation")
-mostrar_aerovias = st.sidebar.checkbox("Airways", value=False)
+mostrar_rnav = st.sidebar.checkbox("RNAV Routes", value=False)
+mostrar_ats_hi = st.sidebar.checkbox("ATS Routes (HI)", value=False)
+mostrar_ats_low = st.sidebar.checkbox("ATS Routes (LOW)", value=False)
 mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=False)
 mostrar_vors = st.sidebar.checkbox("Show VORs / Navaids", value=True)
 mostrar_waypoints = st.sidebar.checkbox("Show Waypoints (Fixes)", value=False)
@@ -346,49 +397,18 @@ for nombre_hoja, sectores in dict_espacio_procesado.items():
             ).add_to(capa_espacio)
 capa_espacio.add_to(m)
 
-# LAYER 1.5: AIRWAYS (Aerovias_Waypoints con Columnas A e independencia por aerovía)
-capa_aerovias = folium.FeatureGroup(name="Airways", show=mostrar_aerovias)
-if mostrar_aerovias and not df_aerovias.empty:
-    df_aerovias.columns = df_aerovias.columns.str.strip()
-    col_aerovia = df_aerovias.columns[0]  # Columna A exacta
-    
-    for nombre_aerovía, grupo in df_aerovias.groupby(col_aerovia):
-        puntos_aerovia = []
-        for _, row in grupo.iterrows():
-            lat = None
-            lon = None
-            for c in grupo.columns:
-                if 'lat' in c.lower(): lat = row[c]
-                if 'lon' in c.lower() or 'lng' in c.lower(): lon = row[c]
-            
-            if pd.notnull(lat) and pd.notnull(lon):
-                puntos_aerovia.append((float(lat), float(lon)))
-            else:
-                for c in grupo.columns:
-                    val_str = str(row[c]).strip()
-                    if val_str in dicc_waypoints:
-                        puntos_aerovia.append(dicc_waypoints[val_str])
-                        break
-        
-        if len(puntos_aerovia) > 1:
-            estilo_base = {"color": "#00FFFF", "weight": 0.8, "opacity": 0.6}
-            estilo_hover = {"color": "#39FF14", "weight": 2.5, "opacity": 1.0}
-            
-            # Se renderiza cada aerovía de manera independiente para que solo se pinte en verde la señalada
-            folium.GeoJson(
-                {
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "LineString",
-                        "coordinates": [[lon, lat] for lat, lon in puntos_aerovia]
-                    },
-                    "properties": {"name": str(nombre_aerovía)}
-                },
-                style_function=lambda x, estilo=estilo_base: estilo,
-                highlight_function=lambda x, estilo=estilo_hover: estilo,
-                tooltip=folium.GeoJsonTooltip(fields=["name"], aliases=["Airway: "], sticky=True)
-            ).add_to(capa_aerovias)
-capa_aerovias.add_to(m)
+# LAYER 1.5: RUTAS RNAV y ATS
+capa_rnav = folium.FeatureGroup(name="RNAV Routes", show=mostrar_rnav)
+if mostrar_rnav: agregar_capa_rutas(df_rnav, capa_rnav, "#00FFFF", "RNAV Route", dicc_waypoints)
+capa_rnav.add_to(m)
+
+capa_ats_hi = folium.FeatureGroup(name="ATS Routes (HI)", show=mostrar_ats_hi)
+if mostrar_ats_hi: agregar_capa_rutas(df_ats_hi, capa_ats_hi, "#FF00FF", "ATS Route (HI)", dicc_waypoints)
+capa_ats_hi.add_to(m)
+
+capa_ats_low = folium.FeatureGroup(name="ATS Routes (LOW)", show=mostrar_ats_low)
+if mostrar_ats_low: agregar_capa_rutas(df_ats_low, capa_ats_low, "#FFA500", "ATS Route (LOW)", dicc_waypoints)
+capa_ats_low.add_to(m)
 
 # LAYER 2: VORs y Waypoints Separados
 capa_navaids = folium.FeatureGroup(name="Waypoints & Radioayudas")
@@ -603,6 +623,39 @@ TimestampedGeoJson(
     period="PT1M", duration="PT1M", add_last_point=False, auto_play=True,
     loop=True, max_speed=5, loop_button=True, time_slider_drag_update=True, transition_time=333,
 ).add_to(m)
+
+# -------------------------------------------------------------------------
+# RELOJES TÁCTICOS (UTC, CDMX, MAZATLÁN) VÍA HTML/JS EN FOLIUM
+# -------------------------------------------------------------------------
+html_relojes = """
+<div style="position: fixed; top: 15px; right: 80px; z-index: 1000; display: flex; gap: 15px; background-color: rgba(17, 24, 39, 0.85); padding: 8px 20px; border-radius: 8px; border: 1px solid #374151; backdrop-filter: blur(4px); box-shadow: 0px 4px 6px rgba(0,0,0,0.5);">
+    <div style="text-align: center; color: #39FF14; font-family: monospace;">
+        <div style="font-size: 0.75rem; font-weight: bold; color: #9CA3AF; margin-bottom: 2px;">UTC Time</div>
+        <div id="clock_utc" style="font-size: 1.25rem; font-weight: bold; letter-spacing: 1px;">--:--:--</div>
+    </div>
+    <div style="text-align: center; color: #00FFFF; font-family: monospace; border-left: 1px solid #4B5563; padding-left: 15px;">
+        <div style="font-size: 0.75rem; font-weight: bold; color: #9CA3AF; margin-bottom: 2px;">CDMX Time</div>
+        <div id="clock_cdmx" style="font-size: 1.25rem; font-weight: bold; letter-spacing: 1px;">--:--:--</div>
+    </div>
+    <div style="text-align: center; color: #FF00FF; font-family: monospace; border-left: 1px solid #4B5563; padding-left: 15px;">
+        <div style="font-size: 0.75rem; font-weight: bold; color: #9CA3AF; margin-bottom: 2px;">Mazatlan Time</div>
+        <div id="clock_mzt" style="font-size: 1.25rem; font-weight: bold; letter-spacing: 1px;">--:--:--</div>
+    </div>
+</div>
+<script>
+    function actualizarRelojes() {
+        const ahora = new Date();
+        const opciones = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+        
+        document.getElementById('clock_utc').innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'UTC' });
+        document.getElementById('clock_cdmx').innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'America/Mexico_City' });
+        document.getElementById('clock_mzt').innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'America/Mazatlan' });
+    }
+    setInterval(actualizarRelojes, 1000);
+    actualizarRelojes();
+</script>
+"""
+m.get_root().html.add_child(folium.Element(html_relojes))
 
 folium.LayerControl().add_to(m)
 st_folium(m, width=1400, height=750, returned_objects=[])
