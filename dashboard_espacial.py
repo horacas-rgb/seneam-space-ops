@@ -29,8 +29,10 @@ def cargar_bases_datos(mision):
     df_wp = pd.read_excel("Coordenadas_Waypoints_ENR_3.3.xlsx", sheet_name="Waypoints_Unicos", header=3)
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
+    
+    # CORRECCIÓN AQUÍ: Sintaxis correcta de las listas de columnas
     dicc_wp = pd.Series(
-        zip(df_wp['Latitud (Decimal)', 'Longitud (Decimal)']), 
+        zip(df_wp['Latitud (Decimal)'], df_wp['Longitud (Decimal)']), 
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
     ).to_dict()
     
