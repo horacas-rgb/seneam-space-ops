@@ -283,19 +283,44 @@ for nombre_hoja, sectores in dict_espacio_procesado.items():
             ).add_to(capa_espacio)
 capa_espacio.add_to(m)
 
-# LAYER 2: Waypoints
+# LAYER 2: Waypoints y VORs (Ajuste de color #FFFFE0 y designadores 3 letras)
 if mostrar_waypoints:
     capa_waypoints = folium.FeatureGroup(name="Waypoints and VORs")
     for _, row in df_waypoints.iterrows():
+        nombre_original = str(row['Nombre del Punto / Waypoint']).strip()
+        designador = nombre_original.split()[0] if nombre_original else ""
+        lat = row['Latitud (Decimal)']
+        lon = row['Longitud (Decimal)']
+        
+        # Círculo base para todos los puntos en amarillo claro
         folium.CircleMarker(
-            location=[row['Latitud (Decimal)'], row['Longitud (Decimal)']],
-            radius=1.5, color='#00FFFF', fill=True, tooltip=row['Nombre del Punto / Waypoint']
+            location=[lat, lon],
+            radius=2.5, 
+            color='#FFFFE0', 
+            weight=1.5,
+            fill=True, 
+            fill_color='#FFFFE0',
+            fill_opacity=0.9, 
+            tooltip=nombre_original
         ).add_to(capa_waypoints)
+        
+        # Etiqueta visible permanentemente solo para designadores de 3 letras (Ej: CPE, CUN, TIJ)
+        if len(designador) == 3:
+            folium.map.Marker(
+                [lat, lon],
+                icon=folium.DivIcon(
+                    icon_size=(40, 15), 
+                    icon_anchor=(20, -7), # Posicionado debajito del marcador circular
+                    html=f'<div style="font-size: 7.5pt; color: #FFFFE0; font-weight: bold; text-shadow: 1px 1px 2px black, -1px -1px 2px black; text-align: center;">{designador}</div>'
+                )
+            ).add_to(capa_waypoints)
+            
     capa_waypoints.add_to(m)
 
 # --- VENTANAS DE TIEMPO DINÁMICAS (Lanzamiento y Reingreso) ---
 if "Flight-15" in operacion:
-    rango_launch = list(pd.date_range(start=pd.to_datetime("2026-11-13 22:45:00"), end=pd.to_datetime("2026-11-14 00:40:00"), freq='1min'))
+    # AJUSTE 1: El timelapse ahora inicia a las 20:45 UTC para abarcar la previa operativa
+    rango_launch = list(pd.date_range(start=pd.to_datetime("2026-11-13 20:45:00"), end=pd.to_datetime("2026-11-14 00:40:00"), freq='1min'))
     rango_reentry = list(pd.date_range(start=pd.to_datetime("2026-11-14 20:56:00"), end=pd.to_datetime("2026-11-15 00:14:00"), freq='1min'))
     t_liftoff = pd.to_datetime("2026-11-13 22:45:00")
     t_end_liftoff = pd.to_datetime("2026-11-13 23:00:00")  # Margen estimado ante T-0 TBD
