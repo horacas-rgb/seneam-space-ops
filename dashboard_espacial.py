@@ -190,7 +190,7 @@ if operacion == "Upcoming launches...":
 df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_aerovias = cargar_bases_datos(operacion)
 
 st.sidebar.title("🎛️ Map Control Panel")
-st.sidebar.markdown("### Capas de Espacio Aéreo")
+st.sidebar.markdown("### Airspace Layers")
 mostrar_firs = st.sidebar.checkbox("Mexico FIR, Mazatlan Oceanic FIR", value=True)
 mostrar_acc_mid = st.sidebar.checkbox("Merida Control Center (MMID ACC)", value=False)
 mostrar_acc_mty = st.sidebar.checkbox("Monterrey Control Center (MMTY ACC)", value=False)
@@ -212,8 +212,8 @@ mostrar_10_7 = st.sidebar.checkbox("10^-7 Area MMFR", value=True)
 st.sidebar.markdown("### Flight Data & Navigation")
 mostrar_aerovias = st.sidebar.checkbox("Airways", value=False)
 mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=False)
-mostrar_vors = st.sidebar.checkbox("Mostrar VORs / Radioayudas", value=True)
-mostrar_waypoints = st.sidebar.checkbox("Mostrar Waypoints (Fijos)", value=False)
+mostrar_vors = st.sidebar.checkbox("Show VORs / Navaids", value=True)
+mostrar_waypoints = st.sidebar.checkbox("Show Waypoints (Fixes)", value=False)
 
 if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeline.columns:
     st.markdown("""<div style="background-color: #1F2937; padding: 15px; border-radius: 10px; border: 1px solid #374151; margin-bottom: 20px;"><h4 style="color: #39FF14; margin-top: 0;">⏱️ Critical Timeline Events (UTC)</h4><ul style="color: #E5E7EB; font-size: 0.95rem; margin-bottom: 0;">""", unsafe_allow_html=True)
