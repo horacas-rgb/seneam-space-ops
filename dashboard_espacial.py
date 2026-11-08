@@ -30,7 +30,6 @@ def cargar_bases_datos(mision):
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
     
-    # CORRECCIÓN AQUÍ: Sintaxis correcta de las listas de columnas
     dicc_wp = pd.Series(
         zip(df_wp['Latitud (Decimal)'], df_wp['Longitud (Decimal)']), 
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
@@ -284,18 +283,28 @@ for nombre_hoja, sectores in dict_espacio_procesado.items():
             ).add_to(capa_espacio)
 capa_espacio.add_to(m)
 
-# LAYER 2: Waypoints y VORs (Ajuste de Colores Tacticos: Cyan y Amarillo Fuerte)
+# LAYER 2: Waypoints y VORs (Ajuste de Filtrado de Designadores)
 if mostrar_waypoints:
     capa_waypoints = folium.FeatureGroup(name="Waypoints and VORs")
     for _, row in df_waypoints.iterrows():
-        nombre_original = str(row['Nombre del Punto / Waypoint']).strip()
-        # Se extrae solo la primera palabra para el designador (ej: "CPE" de "CPE VOR")
-        designador = nombre_original.split()[0] if nombre_original else ""
+        nombre_original = str(row['Nombre del Punto / Waypoint']).strip().upper()
+        
+        # 1. Limpiar caracteres como '/' y separar en palabras
+        nombre_limpio = re.sub(r'[^A-Z0-9\s]', ' ', nombre_original)
+        partes = nombre_limpio.split()
+        
+        # 2. Filtrar palabras descriptivas para quedarse SÓLO con el designador
+        tipos_instalacion = {"VOR", "NDB", "DME", "VORTAC", "TACAN", "ILS"}
+        partes_utiles = [p for p in partes if p not in tipos_instalacion]
+        
+        # El designador real (ej: MEX, TIJ, CPE)
+        designador = partes_utiles[0] if partes_utiles else ""
+        
+        # 3. Las radioayudas (VOR/NDB) en México suelen tener 2 o 3 letras. Intersecciones/Waypoints tienen 5.
+        es_vor = (0 < len(designador) <= 3)
+        
         lat = row['Latitud (Decimal)']
         lon = row['Longitud (Decimal)']
-        
-        # Identificamos si es VOR o Waypoint basándonos en que las radioayudas tienen designador de 3 letras
-        es_vor = (len(designador) == 3)
         
         # Selección de colores: VOR = Amarillo fuerte (#FFD700), Waypoint = Cyan (#00FFFF)
         color_punto = '#FFD700' if es_vor else '#00FFFF'
@@ -313,7 +322,7 @@ if mostrar_waypoints:
             tooltip=nombre_original
         ).add_to(capa_waypoints)
         
-        # Etiqueta visible permanentemente SOLO para los VORs (designador 3 letras)
+        # Etiqueta visible permanentemente SÓLO para las radioayudas
         if es_vor:
             folium.map.Marker(
                 [lat, lon],
@@ -328,7 +337,6 @@ if mostrar_waypoints:
 
 # --- VENTANAS DE TIEMPO DINÁMICAS (Lanzamiento y Reingreso) ---
 if "Flight-15" in operacion:
-    # AJUSTE 1: El timelapse ahora inicia a las 20:45 UTC para abarcar la previa operativa
     rango_launch = list(pd.date_range(start=pd.to_datetime("2026-11-13 20:45:00"), end=pd.to_datetime("2026-11-14 00:40:00"), freq='1min'))
     rango_reentry = list(pd.date_range(start=pd.to_datetime("2026-11-14 20:56:00"), end=pd.to_datetime("2026-11-15 00:14:00"), freq='1min'))
     t_liftoff = pd.to_datetime("2026-11-13 22:45:00")
@@ -456,14 +464,4 @@ for t in rango_liftoff:
     })
     features_geojson.append({
         "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_boca_chica, lat_boca_chica + 0.35]},
-        "properties": {"times": [int(t_shift.timestamp() * 1000)], "icon": "marker", "iconstyle": {"iconUrl": icon_url_banner, "iconSize": [320, 45], "iconAnchor": [160, 22]}}
-    })
-
-TimestampedGeoJson(
-    {"type": "FeatureCollection", "features": features_geojson},
-    period="PT1M", duration="PT1M", add_last_point=False, auto_play=True,
-    loop=True, max_speed=5, loop_button=True, time_slider_drag_update=True, transition_time=333,
-).add_to(m)
-
-folium.LayerControl().add_to(m)
-st_folium(m, width=1400, height=750, returned_objects=[])
+        "properties": {"times": [int(t_shift.timestamp() *
