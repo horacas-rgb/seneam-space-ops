@@ -121,17 +121,17 @@ def cargar_bases_datos(mision):
             
             df_c3 = pd.read_excel(archivo_areas, sheet_name="AHA_C3_MMFR", header=3)
             df_c3.columns = df_c3.columns.str.strip()
-            df_c3 = df_c3.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
+            df_c3.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'], inplace=True)
             df_c3['Área / Hazard Zone'] = 'AHA-C3'
 
             df_c4 = pd.read_excel(archivo_areas, sheet_name="AHA_C4_US", header=3)
             df_c4.columns = df_c4.columns.str.strip()
-            df_c4 = df_c4.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
+            df_c4.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'], inplace=True)
             df_c4['Área / Hazard Zone'] = 'AHA-C4-US'
             
             df_areas = pd.concat([df_areas, df_c2, df_c3, df_c4], ignore_index=True)
-        except Exception:
-            pass
+        except Exception as e:
+            print("Error cargando áreas de reingreso:", e)
     
     # D. Espacio Aéreo SENEAM
     xls_espacio = pd.ExcelFile("Coordenadas_Espacio_Aereo_SENEAM.xlsx")
