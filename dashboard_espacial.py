@@ -6,7 +6,8 @@ import pandas as pd
 import re
 import os
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import time
 import requests
 
 # 1. Configuración de la Página Ejecutiva
@@ -224,7 +225,7 @@ with col2:
     if os.path.exists("Seneam_Logo.png"): st.image("Seneam_Logo.png", use_container_width=True)
 
 # -------------------------------------------------------------------------
-# BARRA SUPERIOR DE RELOJES EN TIEMPO REAL CON JAVASCRIPT (ACTIVOS)
+# BARRA SUPERIOR DE RELOJES EN TIEMPO REAL (NATIVO STREAMLIT CON AUTO-REFRESH)
 # -------------------------------------------------------------------------
 st.markdown("""
 <style>
@@ -238,14 +239,6 @@ st.markdown("""
     border-radius: 8px;
     border: 1px solid #374151;
     margin-bottom: 15px;
-}
-.clock-label-main {
-    font-size: 1.1rem;
-    font-weight: bold;
-    color: #39FF14;
-    letter-spacing: 0.5px;
-    margin-right: auto;
-    padding-left: 5px;
 }
 .clock-box {
     text-align: center;
@@ -261,40 +254,10 @@ st.markdown("""
 .clock-time-cdmx { font-size: 1.25rem; font-weight: bold; color: #00FFFF; letter-spacing: 1px; }
 .clock-time-mzt { font-size: 1.25rem; font-weight: bold; color: #FF00FF; letter-spacing: 1px; }
 </style>
-
-<div class="clock-container">
-    <div class="clock-label-main">🕒 Current Time</div>
-    <div class="clock-box">
-        <div class="clock-title">UTC Time</div>
-        <div id="js_clock_utc" class="clock-time-utc">--:--:--</div>
-    </div>
-    <div class="clock-box" style="border-left: 1px solid #4B5563; padding-left: 20px;">
-        <div class="clock-title">CDMX Time</div>
-        <div id="js_clock_cdmx" class="clock-time-cdmx">--:--:--</div>
-    </div>
-    <div class="clock-box" style="border-left: 1px solid #4B5563; padding-left: 20px;">
-        <div class="clock-title">Mazatlan Time</div>
-        <div id="js_clock_mzt" class="clock-time-mzt">--:--:--</div>
-    </div>
-</div>
-
-<script>
-    function actualizarRelojesEnVivo() {
-        const ahora = new Date();
-        const opciones = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
-        
-        let elUtc = document.getElementById('js_clock_utc');
-        let elCdmx = document.getElementById('js_clock_cdmx');
-        let elMzt = document.getElementById('js_clock_mzt');
-        
-        if (elUtc) elUtc.innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'UTC' });
-        if (elCdmx) elCdmx.innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'America/Mexico_City' });
-        if (elMzt) elMzt.innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'America/Mazatlan' });
-    }
-    setInterval(actualizarRelojesEnVivo, 1000);
-    actualizarRelojesEnVivo();
-</script>
 """, unsafe_allow_html=True)
+
+# Contenedor dinámico y Título con la misma tipografía que "Critical Timeline Events (UTC)"
+reloj_placeholder = st.empty()
 
 operaciones = [
     "SpaceX Starship Super Heavy Flight-15: Launch Nov 13th, 2026 - Reentry Nov 14th",
@@ -698,4 +661,32 @@ TimestampedGeoJson(
 ).add_to(m)
 
 folium.LayerControl().add_to(m)
-st_folium(m, width=1400, height=750, returned_objects=[])
+
+# Actualización continua segundo a segundo de los relojes y renderizado del mapa
+while True:
+    utc_now = datetime.now(timezone.utc)
+    now_utc = utc_now.strftime('%H:%M:%S')
+    now_cdmx = (utc_now - timedelta(hours=6)).strftime('%H:%M:%S')
+    now_mzt = (utc_now - timedelta(hours=7)).strftime('%H:%M:%S')
+
+    reloj_placeholder.markdown(f"""
+    <div class="clock-container">
+        <h4 style="color: #39FF14; margin: 0 auto 0 5px; font-size: 1.15rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-weight: 600;">Current Time</h4>
+        <div class="clock-box">
+            <div class="clock-title">UTC Time</div>
+            <div class="clock-time-utc">{now_utc}</div>
+        </div>
+        <div class="clock-box" style="border-left: 1px solid #4B5563; padding-left: 20px;">
+            <div class="clock-title">CDMX Time</div>
+            <div class="clock-time-cdmx">{now_cdmx}</div>
+        </div>
+        <div class="clock-box" style="border-left: 1px solid #4B5563; padding-left: 20px;">
+            <div class="clock-title">Mazatlan Time</div>
+            <div class="clock-time-mzt">{now_mzt}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st_folium(m, width=1400, height=750, returned_objects=[])
+    time.sleep(1)
+    st.rerun()
