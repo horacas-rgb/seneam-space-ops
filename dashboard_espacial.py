@@ -346,18 +346,15 @@ for nombre_hoja, sectores in dict_espacio_procesado.items():
             ).add_to(capa_espacio)
 capa_espacio.add_to(m)
 
-# LAYER 1.5: AIRWAYS (Aerovias_Waypoints)
+# LAYER 1.5: AIRWAYS (Aerovias_Waypoints con Tooltip al pasar el cursor)
 capa_aerovias = folium.FeatureGroup(name="Airways", show=mostrar_aerovias)
 if mostrar_aerovias and not df_aerovias.empty:
     df_aerovias.columns = df_aerovias.columns.str.strip()
-    # Identificar posibles nombres de columnas para aerovía y waypoints/coordenadas
     col_aerovia = next((c for c in df_aerovias.columns if 'aerov' in c.lower() or 'route' in c.lower() or 'designador' in c.lower() or 'id' in c.lower()), df_aerovias.columns[0])
     
-    # Agrupamos por aerovía si existe una columna identificadora, de lo contrario trazamos por pares o segmentos
     for nombre_aerovía, grupo in df_aerovias.groupby(col_aerovia):
         puntos_aerovia = []
         for _, row in grupo.iterrows():
-            # Buscar lat/lon directamente en el dataframe o buscar en dicc_wp si hay nombres de puntos
             lat = None
             lon = None
             for c in grupo.columns:
@@ -367,7 +364,6 @@ if mostrar_aerovias and not df_aerovias.empty:
             if pd.notnull(lat) and pd.notnull(lon):
                 puntos_aerovia.append((float(lat), float(lon)))
             else:
-                # Buscar por nombre de waypoint en las columnas de texto
                 for c in grupo.columns:
                     val_str = str(row[c]).strip()
                     if val_str in dicc_waypoints:
@@ -375,12 +371,22 @@ if mostrar_aerovias and not df_aerovias.empty:
                         break
         
         if len(puntos_aerovia) > 1:
-            folium.PolyLine(
-                locations=puntos_aerovia,
-                color="#00FFFF",
-                weight=0.8,
-                opacity=0.6,
-                tooltip=f"Airway: {nombre_aerovía}"
+            # Estilo interactivo para que al pasar el cursor se resalte y despliegue la etiqueta limpia
+            estilo_base = {"color": "#00FFFF", "weight": 0.8, "opacity": 0.6}
+            estilo_hover = {"color": "#39FF14", "weight": 2.5, "opacity": 1.0}
+            
+            folium.GeoJson(
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[lon, lat] for lat, lon in puntos_aerovia]
+                    },
+                    "properties": {"name": str(nombre_aerovía)}
+                },
+                style_function=lambda x: estilo_base,
+                highlight_function=lambda x: estilo_hover,
+                tooltip=folium.GeoJsonTooltip(fields=["name"], aliases=["Airway: "], sticky=True)
             ).add_to(capa_aerovias)
 capa_aerovias.add_to(m)
 
