@@ -625,7 +625,7 @@ TimestampedGeoJson(
 ).add_to(m)
 
 # -------------------------------------------------------------------------
-# RELOJES TÁCTICOS (UTC, CDMX, MAZATLÁN) VÍA HTML/JS EN FOLIUM
+# RELOJES TÁCTICOS (A prueba de fallos de DOM en Streamlit-Folium)
 # -------------------------------------------------------------------------
 html_relojes = """
 <div style="position: fixed; top: 15px; right: 80px; z-index: 1000; display: flex; gap: 15px; background-color: rgba(17, 24, 39, 0.85); padding: 8px 20px; border-radius: 8px; border: 1px solid #374151; backdrop-filter: blur(4px); box-shadow: 0px 4px 6px rgba(0,0,0,0.5);">
@@ -644,13 +644,23 @@ html_relojes = """
 </div>
 <script>
     function actualizarRelojes() {
-        const ahora = new Date();
-        const opciones = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
-        
-        document.getElementById('clock_utc').innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'UTC' });
-        document.getElementById('clock_cdmx').innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'America/Mexico_City' });
-        document.getElementById('clock_mzt').innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'America/Mazatlan' });
+        try {
+            const ahora = new Date();
+            const opciones = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+            
+            let eUtc = document.getElementById('clock_utc');
+            let eCdmx = document.getElementById('clock_cdmx');
+            let eMzt = document.getElementById('clock_mzt');
+            
+            if (eUtc) eUtc.innerText = ahora.toLocaleTimeString('en-US', { ...opciones, timeZone: 'UTC' });
+            if (eCdmx) eCdmx.innerText = ahora.toLocaleTimeString('en-US', { ...opciones, timeZone: 'America/Mexico_City' });
+            if (eMzt) eMzt.innerText = ahora.toLocaleTimeString('en-US', { ...opciones, timeZone: 'America/Mazatlan' });
+        } catch(e) {
+            console.error("Error actualizando relojes: ", e);
+        }
     }
+    // El script ahora verifica si existen los IDs antes de inyectar el texto.
+    // Si Streamlit tarda en dibujar los contenedores, los encontrará en el próximo segundo ininterrumpidamente.
     setInterval(actualizarRelojes, 1000);
     actualizarRelojes();
 </script>
