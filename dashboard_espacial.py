@@ -170,7 +170,6 @@ mostrar_10_7 = st.sidebar.checkbox("10^-7 Area MMFR", value=True)
 
 st.sidebar.markdown("### Flight Data & Navigation")
 mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=False)
-# Separación de capas tácticas solicitada
 mostrar_vors = st.sidebar.checkbox("Mostrar VORs / Radioayudas", value=True)
 mostrar_waypoints = st.sidebar.checkbox("Mostrar Waypoints (Fijos)", value=False)
 
@@ -308,8 +307,8 @@ capa_espacio.add_to(m)
 # LAYER 2: VORs y Waypoints Separados
 capa_navaids = folium.FeatureGroup(name="Waypoints & Radioayudas")
 
-if not df_wp.empty:
-    for _, row in df_wp.iterrows():
+if not df_waypoints.empty:
+    for _, row in df_waypoints.iterrows():
         lat = row['Latitud (Decimal)']
         lon = row['Longitud (Decimal)']
         tipo = row['Tipo']
