@@ -30,7 +30,7 @@ def cargar_bases_datos(mision):
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
     dicc_wp = pd.Series(
-        zip(df_wp['Latitud (Decimal)'], df_wp['Longitud (Decimal)']), 
+        zip(df_wp['Latitud (Decimal)', 'Longitud (Decimal)']), 
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
     ).to_dict()
     
@@ -139,7 +139,6 @@ mostrar_tfr = st.sidebar.checkbox("TFR: Temporary Flight Restriction", value=Tru
 mostrar_dra = st.sidebar.checkbox("DRA-1 Area", value=True)
 mostrar_aha = st.sidebar.checkbox("Launch Hazard Areas (AHA-A3 & AHA-B1)", value=True)
 
-# Lógica condicional para mostrar el checkbox de reingreso solo en FLT-15
 if "Flight-15" in operacion:
     mostrar_aha_reentry = st.sidebar.checkbox("Reentry Hazard Areas (AHA-C2 & AHA-C3)", value=True)
 else:
@@ -283,35 +282,43 @@ for nombre_hoja, sectores in dict_espacio_procesado.items():
             ).add_to(capa_espacio)
 capa_espacio.add_to(m)
 
-# LAYER 2: Waypoints y VORs (Ajuste de color #FFFFE0 y designadores 3 letras)
+# LAYER 2: Waypoints y VORs (Ajuste de Colores Tacticos: Cyan y Amarillo Fuerte)
 if mostrar_waypoints:
     capa_waypoints = folium.FeatureGroup(name="Waypoints and VORs")
     for _, row in df_waypoints.iterrows():
         nombre_original = str(row['Nombre del Punto / Waypoint']).strip()
+        # Se extrae solo la primera palabra para el designador (ej: "CPE" de "CPE VOR")
         designador = nombre_original.split()[0] if nombre_original else ""
         lat = row['Latitud (Decimal)']
         lon = row['Longitud (Decimal)']
         
-        # Círculo base para todos los puntos en amarillo claro
+        # Identificamos si es VOR o Waypoint basándonos en que las radioayudas tienen designador de 3 letras
+        es_vor = (len(designador) == 3)
+        
+        # Selección de colores: VOR = Amarillo fuerte (#FFD700), Waypoint = Cyan (#00FFFF)
+        color_punto = '#FFD700' if es_vor else '#00FFFF'
+        radio_punto = 3.0 if es_vor else 1.5
+        
+        # Círculo base para el punto
         folium.CircleMarker(
             location=[lat, lon],
-            radius=2.5, 
-            color='#FFFFE0', 
-            weight=1.5,
+            radius=radio_punto, 
+            color=color_punto, 
+            weight=1.5 if es_vor else 1.0,
             fill=True, 
-            fill_color='#FFFFE0',
-            fill_opacity=0.9, 
+            fill_color=color_punto,
+            fill_opacity=0.9 if es_vor else 0.6, 
             tooltip=nombre_original
         ).add_to(capa_waypoints)
         
-        # Etiqueta visible permanentemente solo para designadores de 3 letras (Ej: CPE, CUN, TIJ)
-        if len(designador) == 3:
+        # Etiqueta visible permanentemente SOLO para los VORs (designador 3 letras)
+        if es_vor:
             folium.map.Marker(
                 [lat, lon],
                 icon=folium.DivIcon(
                     icon_size=(40, 15), 
-                    icon_anchor=(20, -7), # Posicionado debajito del marcador circular
-                    html=f'<div style="font-size: 7.5pt; color: #FFFFE0; font-weight: bold; text-shadow: 1px 1px 2px black, -1px -1px 2px black; text-align: center;">{designador}</div>'
+                    icon_anchor=(20, -7), # Posicionado ligeramente abajo del marcador
+                    html=f'<div style="font-size: 8pt; color: #FFD700; font-weight: bold; text-shadow: 1px 1px 2px black, -1px -1px 2px black, 0px 0px 4px rgba(0,0,0,0.8); text-align: center;">{designador}</div>'
                 )
             ).add_to(capa_waypoints)
             
@@ -323,7 +330,7 @@ if "Flight-15" in operacion:
     rango_launch = list(pd.date_range(start=pd.to_datetime("2026-11-13 20:45:00"), end=pd.to_datetime("2026-11-14 00:40:00"), freq='1min'))
     rango_reentry = list(pd.date_range(start=pd.to_datetime("2026-11-14 20:56:00"), end=pd.to_datetime("2026-11-15 00:14:00"), freq='1min'))
     t_liftoff = pd.to_datetime("2026-11-13 22:45:00")
-    t_end_liftoff = pd.to_datetime("2026-11-13 23:00:00")  # Margen estimado ante T-0 TBD
+    t_end_liftoff = pd.to_datetime("2026-11-13 23:00:00")
     rango_liftoff = list(pd.date_range(start=t_liftoff, end=t_end_liftoff, freq='1min'))
     banner_text = "🚀 STARSHIP FLIGHT-15 LIFT OFF"
 else:
