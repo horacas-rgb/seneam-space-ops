@@ -121,12 +121,12 @@ def cargar_bases_datos(mision):
             
             df_c3 = pd.read_excel(archivo_areas, sheet_name="AHA_C3_MMFR", header=3)
             df_c3.columns = df_c3.columns.str.strip()
-            df_c3.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'], inplace=True)
+            df_c3 = df_c3.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
             df_c3['Área / Hazard Zone'] = 'AHA-C3'
 
             df_c4 = pd.read_excel(archivo_areas, sheet_name="AHA_C4_US", header=3)
             df_c4.columns = df_c4.columns.str.strip()
-            df_c4.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'], inplace=True)
+            df_c4 = df_c4.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
             df_c4['Área / Hazard Zone'] = 'AHA-C4-US'
             
             df_areas = pd.concat([df_areas, df_c2, df_c3, df_c4], ignore_index=True)
@@ -561,7 +561,7 @@ capa_areas = folium.FeatureGroup(name="Space Hazard Areas")
 for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_capas):
     area_str = str(area).upper()
     
-    if "C2" in area_str or "C3" in area_str or "C4" in area_str:
+    if "C2" in area_str or "C3" in area_str or "C4" in area_str or "AHA-C" in area_str:
         if not mostrar_aha_reentry: continue
         if "C2" in area_str:
             color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C2"
@@ -604,7 +604,7 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
         icon=folium.DivIcon(icon_size=(100,20), icon_anchor=(50,10), html=f'<div style="font-size: 10pt; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; text-align: center;">{label_name}</div>')
     ).add_to(capa_areas)
     
-    coords_lon_lat = [[lon, lat] for lat, lon in zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)'])]
+    coords_lon_lat = [[lon, lat] for lat, lon in zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)phenyl'])] if False else [[lon, lat] for lat, lon in zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)'])]
     if coords_lon_lat[0] != coords_lon_lat[-1]: coords_lon_lat.append(coords_lon_lat[0])
     
     for t in tiempos_activos:
