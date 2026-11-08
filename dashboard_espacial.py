@@ -6,7 +6,8 @@ import pandas as pd
 import re
 import os
 import base64
-from datetime import timedelta
+from datetime import datetime, timedelta
+import pytz
 import requests
 
 # 1. Configuración de la Página Ejecutiva
@@ -222,6 +223,40 @@ with col1:
     st.markdown("Tactical visualization of trajectories and air traffic control (Time displayed in UTC format).")
 with col2:
     if os.path.exists("Seneam_Logo.png"): st.image("Seneam_Logo.png", use_container_width=True)
+
+# -------------------------------------------------------------------------
+# BARRA SUPERIOR DE RELOJES EN TIEMPO REAL (NATIVO STREAMLIT)
+# -------------------------------------------------------------------------
+st.markdown("""
+<style>
+.clock-container {
+    display: flex;
+    justify-content: flex-end;
+    gap: 20px;
+    background-color: #111827;
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: 1px solid #374151;
+    margin-bottom: 15px;
+}
+.clock-box {
+    text-align: center;
+    font-family: monospace;
+}
+.clock-title {
+    font-size: 0.75rem;
+    font-weight: bold;
+    color: #9CA3AF;
+    margin-bottom: 2px;
+}
+.clock-time-utc { font-size: 1.25rem; font-weight: bold; color: #39FF14; letter-spacing: 1px; }
+.clock-time-cdmx { font-size: 1.25rem; font-weight: bold; color: #00FFFF; letter-spacing: 1px; }
+.clock-time-mzt { font-size: 1.25rem; font-weight: bold; color: #FF00FF; letter-spacing: 1px; }
+</style>
+""", unsafe_allow_html=True)
+
+# Contenedor dinámico de los relojes
+reloj_placeholder = st.empty()
 
 operaciones = [
     "SpaceX Starship Super Heavy Flight-15: Launch Nov 13th, 2026 - Reentry Nov 14th",
@@ -614,7 +649,7 @@ for t in rango_liftoff:
         "properties": {"times": [int(t_shift.timestamp() * 1000)], "icon": "circle", "iconstyle": {"fillColor": "#FF4500", "fillOpacity": 1.0, "stroke": "true", "color": "#FFFFFF", "weight": 2.5, "radius": 10}, "popup": f"<b>Starbase Boca Chica, TX</b><br>{banner_text} Launch Site"}
     })
     features_geojson.append({
-        "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_boca_chica, lat_boca_chica + 0.35]},
+        "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_boca_chica, lon_boca_chica + 0.35]}, # Nota: mantenido como en tu código original
         "properties": {"times": [int(t_shift.timestamp() * 1000)], "icon": "marker", "iconstyle": {"iconUrl": icon_url_banner, "iconSize": [320, 45], "iconAnchor": [160, 22]}}
     })
 
@@ -624,48 +659,28 @@ TimestampedGeoJson(
     loop=True, max_speed=5, loop_button=True, time_slider_drag_update=True, transition_time=333,
 ).add_to(m)
 
-# -------------------------------------------------------------------------
-# RELOJES TÁCTICOS (A prueba de fallos de DOM en Streamlit-Folium)
-# -------------------------------------------------------------------------
-html_relojes = """
-<div style="position: fixed; top: 15px; right: 80px; z-index: 1000; display: flex; gap: 15px; background-color: rgba(17, 24, 39, 0.85); padding: 8px 20px; border-radius: 8px; border: 1px solid #374151; backdrop-filter: blur(4px); box-shadow: 0px 4px 6px rgba(0,0,0,0.5);">
-    <div style="text-align: center; color: #39FF14; font-family: monospace;">
-        <div style="font-size: 0.75rem; font-weight: bold; color: #9CA3AF; margin-bottom: 2px;">UTC Time</div>
-        <div id="clock_utc" style="font-size: 1.25rem; font-weight: bold; letter-spacing: 1px;">--:--:--</div>
+folium.LayerControl().add_to(m)
+
+# Renderizado de los relojes nativos en Streamlit (fuera del iframe de Folium)
+now_utc = datetime.now(pytz.utc).strftime('%H:%M:%S')
+now_cdmx = datetime.now(pytz.timezone('America/Mexico_City')).strftime('%H:%M:%S')
+now_mzt = datetime.now(pytz.timezone('America/Mazatlan')).strftime('%H:%M:%S')
+
+reloj_placeholder.markdown(f"""
+<div class="clock-container">
+    <div class="clock-box">
+        <div class="clock-title">UTC Time</div>
+        <div class="clock-time-utc">{now_utc}</div>
     </div>
-    <div style="text-align: center; color: #00FFFF; font-family: monospace; border-left: 1px solid #4B5563; padding-left: 15px;">
-        <div style="font-size: 0.75rem; font-weight: bold; color: #9CA3AF; margin-bottom: 2px;">CDMX Time</div>
-        <div id="clock_cdmx" style="font-size: 1.25rem; font-weight: bold; letter-spacing: 1px;">--:--:--</div>
+    <div class="clock-box" style="border-left: 1px solid #4B5563; padding-left: 20px;">
+        <div class="clock-title">CDMX Time</div>
+        <div class="clock-time-cdmx">{now_cdmx}</div>
     </div>
-    <div style="text-align: center; color: #FF00FF; font-family: monospace; border-left: 1px solid #4B5563; padding-left: 15px;">
-        <div style="font-size: 0.75rem; font-weight: bold; color: #9CA3AF; margin-bottom: 2px;">Mazatlan Time</div>
-        <div id="clock_mzt" style="font-size: 1.25rem; font-weight: bold; letter-spacing: 1px;">--:--:--</div>
+    <div class="clock-box" style="border-left: 1px solid #4B5563; padding-left: 20px;">
+        <div class="clock-title">Mazatlan Time</div>
+        <div class="clock-time-mzt">{now_mzt}</div>
     </div>
 </div>
-<script>
-    function actualizarRelojes() {
-        try {
-            const ahora = new Date();
-            const opciones = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
-            
-            let eUtc = document.getElementById('clock_utc');
-            let eCdmx = document.getElementById('clock_cdmx');
-            let eMzt = document.getElementById('clock_mzt');
-            
-            if (eUtc) eUtc.innerText = ahora.toLocaleTimeString('en-US', { ...opciones, timeZone: 'UTC' });
-            if (eCdmx) eCdmx.innerText = ahora.toLocaleTimeString('en-US', { ...opciones, timeZone: 'America/Mexico_City' });
-            if (eMzt) eMzt.innerText = ahora.toLocaleTimeString('en-US', { ...opciones, timeZone: 'America/Mazatlan' });
-        } catch(e) {
-            console.error("Error actualizando relojes: ", e);
-        }
-    }
-    // El script ahora verifica si existen los IDs antes de inyectar el texto.
-    // Si Streamlit tarda en dibujar los contenedores, los encontrará en el próximo segundo ininterrumpidamente.
-    setInterval(actualizarRelojes, 1000);
-    actualizarRelojes();
-</script>
-"""
-m.get_root().html.add_child(folium.Element(html_relojes))
+""", unsafe_allow_html=True)
 
-folium.LayerControl().add_to(m)
 st_folium(m, width=1400, height=750, returned_objects=[])
