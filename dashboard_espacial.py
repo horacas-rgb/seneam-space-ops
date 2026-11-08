@@ -1,6 +1,7 @@
 import streamlit as st
 import folium
 from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 from folium.plugins import TimestampedGeoJson
 import pandas as pd
 import re
@@ -13,7 +14,7 @@ import requests
 st.set_page_config(page_title="Space Operations - SENEAM", layout="wide")
 AJUSTE_UTC = 6 
 
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def cargar_bases_datos(mision):
     # Selección dinámica de bases de datos según la Misión
     if "Flight-15" in mision:
@@ -58,7 +59,7 @@ def cargar_bases_datos(mision):
     except Exception:
         df_ats_low = pd.DataFrame()
 
-    # Diccionario Oficial de VORs en México (Actualizado)
+    # Diccionario Oficial de VORs en México
     MAPA_VORS_MEXICO = {
         "TIJUANA": "TIJ", "MEXICALI": "MXL", "PEÑASCO": "PPE", "HERMOSILLO": "HMO",
         "OBREGON": "CEN", "OBREGÓN": "CEN", "LORETO": "LTO", "MOCHIS": "LMM",
@@ -224,80 +225,84 @@ with col2:
     if os.path.exists("Seneam_Logo.png"): st.image("Seneam_Logo.png", use_container_width=True)
 
 # -------------------------------------------------------------------------
-# BARRA SUPERIOR DE RELOJES EN TIEMPO REAL (NATIVO CON JS ASÍNCRONO SIN RECARGAR)
+# BARRA SUPERIOR DE RELOJES EN TIEMPO REAL (COMPONENTE AISLADO SEGURO)
 # -------------------------------------------------------------------------
-st.markdown("""
+components.html("""
+<!DOCTYPE html>
+<html>
+<head>
 <style>
-.clock-container {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 20px;
-    background-color: #111827;
-    padding: 10px 20px;
-    border-radius: 8px;
-    border: 1px solid #374151;
-    margin-bottom: 15px;
-}
-.clock-label-main {
-    font-size: 1.15rem;
-    font-weight: 600;
-    color: #39FF14;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-    letter-spacing: 0.5px;
-    margin-right: auto;
-    padding-left: 5px;
-}
-.clock-box {
-    text-align: center;
-    font-family: monospace;
-}
-.clock-title {
-    font-size: 0.75rem;
-    font-weight: bold;
-    color: #9CA3AF;
-    margin-bottom: 2px;
-}
-.clock-time-utc { font-size: 1.25rem; font-weight: bold; color: #39FF14; letter-spacing: 1px; }
-.clock-time-cdmx { font-size: 1.25rem; font-weight: bold; color: #00FFFF; letter-spacing: 1px; }
-.clock-time-mzt { font-size: 1.25rem; font-weight: bold; color: #FF00FF; letter-spacing: 1px; }
+    body {
+        background-color: transparent;
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+    .clock-container {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 20px;
+        background-color: #111827;
+        padding: 10px 20px;
+        border-radius: 8px;
+        border: 1px solid #374151;
+        box-sizing: border-box;
+    }
+    .clock-label-main {
+        font-size: 1.15rem;
+        font-weight: 600;
+        color: #39FF14;
+        letter-spacing: 0.5px;
+        margin-right: auto;
+        padding-left: 5px;
+    }
+    .clock-box {
+        text-align: center;
+        font-family: monospace;
+    }
+    .clock-title {
+        font-size: 0.75rem;
+        font-weight: bold;
+        color: #9CA3AF;
+        margin-bottom: 2px;
+    }
+    .clock-time-utc { font-size: 1.25rem; font-weight: bold; color: #39FF14; letter-spacing: 1px; }
+    .clock-time-cdmx { font-size: 1.25rem; font-weight: bold; color: #00FFFF; letter-spacing: 1px; }
+    .clock-time-mzt { font-size: 1.25rem; font-weight: bold; color: #FF00FF; letter-spacing: 1px; }
 </style>
-
+</head>
+<body>
 <div class="clock-container">
     <div class="clock-label-main">Current Time</div>
     <div class="clock-box">
         <div class="clock-title">UTC Time</div>
-        <div id="live_clock_utc" class="clock-time-utc">--:--:--</div>
+        <div id="utc_time" class="clock-time-utc">--:--:--</div>
     </div>
     <div class="clock-box" style="border-left: 1px solid #4B5563; padding-left: 20px;">
         <div class="clock-title">CDMX Time</div>
-        <div id="live_clock_cdmx" class="clock-time-cdmx">--:--:--</div>
+        <div id="cdmx_time" class="clock-time-cdmx">--:--:--</div>
     </div>
     <div class="clock-box" style="border-left: 1px solid #4B5563; padding-left: 20px;">
         <div class="clock-title">Mazatlan Time</div>
-        <div id="live_clock_mzt" class="clock-time-mzt">--:--:--</div>
+        <div id="mzt_time" class="clock-time-mzt">--:--:--</div>
     </div>
 </div>
 
 <script>
-    function actualizarRelojesCliente() {
-        const ahora = new Date();
-        const opciones = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
+    function updateClocks() {
+        const now = new Date();
+        const options = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };
         
-        let elUtc = document.getElementById('live_clock_utc');
-        let elCdmx = document.getElementById('live_clock_cdmx');
-        let elMzt = document.getElementById('live_clock_mzt');
-        
-        if (elUtc) elUtc.innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'UTC' });
-        if (elCdmx) elCdmx.innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'America/Mexico_City' });
-        if (elMzt) elMzt.innerText = ahora.toLocaleTimeString('en-GB', { ...opciones, timeZone: 'America/Mazatlan' });
+        document.getElementById('utc_time').innerText = now.toLocaleTimeString('en-GB', { ...options, timeZone: 'UTC' });
+        document.getElementById('cdmx_time').innerText = now.toLocaleTimeString('en-GB', { ...options, timeZone: 'America/Mexico_City' });
+        document.getElementById('mzt_time').innerText = now.toLocaleTimeString('en-GB', { ...options, timeZone: 'America/Mazatlan' });
     }
-    // Iniciar y actualizar cada segundo en tiempo real sin recargar la página
-    if (window.clockInterval) clearInterval(window.clockInterval);
-    window.clockInterval = setInterval(actualizarRelojesCliente, 1000);
-    actualizarRelojesCliente();
+    setInterval(updateClocks, 1000);
+    updateClocks();
 </script>
-""", unsafe_allow_html=True)
+</body>
+</html>
+""", height=70)
 
 operaciones = [
     "SpaceX Starship Super Heavy Flight-15: Launch Nov 13th, 2026 - Reentry Nov 14th",
@@ -311,7 +316,7 @@ if operacion == "Upcoming launches...":
     st.markdown("""<div style="text-align: center; padding: 40px; background-color: #111827; border-radius: 15px; border: 1px solid #374151;"><h1 style="color: #39FF14; font-size: 2.8rem; margin-bottom: 20px;">🚀 SpaceX Starship Super Heavy Flight-16</h1><h2 style="color: #FFFFFF; font-size: 2rem; font-weight: 400; margin-bottom: 30px;">Upcoming Launch: TBD</h2><p style="color: #9CA3AF; font-size: 1.1rem; margin-bottom: 40px;">Strategic coordination and air traffic flow management (ATFM) for upcoming orbital flight tests.</p><a href="https://www.spacex.com/content/starship-flight-tests" target="_blank" style="background-color: #2563EB; color: white; padding: 15px 30px; border-radius: 8px; text-decoration: none; font-size: 1.2rem; font-weight: bold;">View Official SpaceX Flight Test Portal ↗</a></div>""", unsafe_allow_html=True)
     st.stop()
 
-# --- CARGA DINÁMICA DE DATOS ---
+# --- CARGA DINÁMICA DE DATOS CON CACHÉ ---
 df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low = cargar_bases_datos(operacion)
 
 st.sidebar.title("🎛️ Map Control Panel")
