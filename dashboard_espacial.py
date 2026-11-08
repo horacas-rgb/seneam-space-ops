@@ -30,6 +30,27 @@ def cargar_bases_datos(mision):
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
     
+    # Procesar y clasificar Puntos desde la carga
+    def clasificar_punto(row):
+        s = str(row['Nombre del Punto / Waypoint']).strip().upper()
+        if 'VOR' in s or 'NDB' in s or 'DME' in s or 'TACAN' in s or 'VORTAC' in s:
+            return 'VOR / Radioayuda'
+        # Si tiene 3 letras y no contiene la palabra VOR, también es radioayuda
+        partes = s.split()
+        if partes and len(partes[0]) <= 3 and partes[0].isalpha():
+            return 'VOR / Radioayuda'
+        return 'Waypoint'
+
+    def obtener_codigo(row):
+        s = str(row['Nombre del Punto / Waypoint']).strip().upper()
+        # Limpiar palabras genéricas
+        s = re.sub(r'\b(VOR|NDB|DME|TACAN|VORTAC|ILS)\b', '', s).strip()
+        partes = s.split()
+        return partes[0] if partes else ""
+
+    df_wp['Tipo'] = df_wp.apply(clasificar_punto, axis=1)
+    df_wp['Codigo_Limpio'] = df_wp.apply(obtener_codigo, axis=1)
+    
     dicc_wp = pd.Series(
         zip(df_wp['Latitud (Decimal)'], df_wp['Longitud (Decimal)']), 
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
@@ -54,7 +75,7 @@ def cargar_bases_datos(mision):
             
             df_areas = pd.concat([df_areas, df_c2, df_c3], ignore_index=True)
         except Exception:
-            pass # Si faltan las hojas, continúa normal
+            pass
     
     # C. Espacio Aéreo SENEAM
     xls_espacio = pd.ExcelFile("Coordenadas_Espacio_Aereo_SENEAM.xlsx")
@@ -85,7 +106,6 @@ def cargar_bases_datos(mision):
                 if pd.isnull(val): return None
                 evento_str = str(row.get('evento', ''))
                 
-                # Asignación inteligente del día si el evento cruza la medianoche (Nov 13 y 14)
                 fecha = fecha_mision
                 if "Flight-15" in mision:
                     if "Nov 14" in evento_str or "Nov 14" in str(val): fecha = "2026-11-14"
@@ -129,13 +149,14 @@ if operacion == "Upcoming launches...":
 df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline = cargar_bases_datos(operacion)
 
 st.sidebar.title("🎛️ Map Control Panel")
+st.sidebar.markdown("### Capas de Espacio Aéreo")
 mostrar_firs = st.sidebar.checkbox("Mexico FIR, Mazatlan Oceanic FIR", value=True)
 mostrar_acc_mid = st.sidebar.checkbox("Merida Control Center (MMID ACC)", value=False)
 mostrar_acc_mty = st.sidebar.checkbox("Monterrey Control Center (MMTY ACC)", value=False)
 mostrar_acc_mex = st.sidebar.checkbox("Mexico Control Center (MMEX ACC)", value=False)
 mostrar_acc_mzt = st.sidebar.checkbox("Mazatlan Control Center (MMZT ACC)", value=False)
 
-st.sidebar.markdown("**Space Launch Hazard Areas**")
+st.sidebar.markdown("### Space Launch Hazard Areas")
 mostrar_tfr = st.sidebar.checkbox("TFR: Temporary Flight Restriction", value=True)
 mostrar_dra = st.sidebar.checkbox("DRA-1 Area", value=True)
 mostrar_aha = st.sidebar.checkbox("Launch Hazard Areas (AHA-A3 & AHA-B1)", value=True)
@@ -147,9 +168,11 @@ else:
 
 mostrar_10_7 = st.sidebar.checkbox("10^-7 Area MMFR", value=True)
 
-st.sidebar.markdown("**Flight Data**")
+st.sidebar.markdown("### Flight Data & Navigation")
 mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=False)
-mostrar_waypoints = st.sidebar.checkbox("Waypoints and VORs", value=True)
+# Separación de capas tácticas solicitada
+mostrar_vors = st.sidebar.checkbox("Mostrar VORs / Radioayudas", value=True)
+mostrar_waypoints = st.sidebar.checkbox("Mostrar Waypoints (Fijos)", value=False)
 
 if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeline.columns:
     st.markdown("""<div style="background-color: #1F2937; padding: 15px; border-radius: 10px; border: 1px solid #374151; margin-bottom: 20px;"><h4 style="color: #39FF14; margin-top: 0;">⏱️ Critical Timeline Events (UTC)</h4><ul style="color: #E5E7EB; font-size: 0.95rem; margin-bottom: 0;">""", unsafe_allow_html=True)
@@ -230,7 +253,6 @@ try:
 
             dict_espacio_procesado[nombre_hoja][sector_name] = pd.DataFrame(new_coords, columns=['Latitud (Decimal)', 'Longitud (Decimal)'])
 except Exception as e:
-    st.warning(f"Error en Fusión Geográfica: {e}")
     for nombre_hoja, df_sheet in dict_espacio.items():
         if 'Área / Sector' in df_sheet.columns:
             dict_espacio_procesado[nombre_hoja] = {s: d for s, d in df_sheet.groupby('Área / Sector')}
@@ -283,57 +305,41 @@ for nombre_hoja, sectores in dict_espacio_procesado.items():
             ).add_to(capa_espacio)
 capa_espacio.add_to(m)
 
-# LAYER 2: Waypoints y VORs (Ajuste de Filtrado de Designadores)
-if mostrar_waypoints:
-    capa_waypoints = folium.FeatureGroup(name="Waypoints and VORs")
-    for _, row in df_waypoints.iterrows():
-        nombre_original = str(row['Nombre del Punto / Waypoint']).strip().upper()
-        
-        # 1. Limpiar caracteres como '/' y separar en palabras
-        nombre_limpio = re.sub(r'[^A-Z0-9\s]', ' ', nombre_original)
-        partes = nombre_limpio.split()
-        
-        # 2. Filtrar palabras descriptivas para quedarse SÓLO con el designador
-        tipos_instalacion = {"VOR", "NDB", "DME", "VORTAC", "TACAN", "ILS"}
-        partes_utiles = [p for p in partes if p not in tipos_instalacion]
-        
-        # El designador real (ej: MEX, TIJ, CPE)
-        designador = partes_utiles[0] if partes_utiles else ""
-        
-        # 3. Las radioayudas (VOR/NDB) en México suelen tener 2 o 3 letras. Intersecciones/Waypoints tienen 5.
-        es_vor = (0 < len(designador) <= 3)
-        
+# LAYER 2: VORs y Waypoints Separados
+capa_navaids = folium.FeatureGroup(name="Waypoints & Radioayudas")
+
+if not df_wp.empty:
+    for _, row in df_wp.iterrows():
         lat = row['Latitud (Decimal)']
         lon = row['Longitud (Decimal)']
+        tipo = row['Tipo']
+        designador = row['Codigo_Limpio']
+        nombre_completo = row['Nombre del Punto / Waypoint']
         
-        # Selección de colores: VOR = Amarillo fuerte (#FFD700), Waypoint = Cyan (#00FFFF)
-        color_punto = '#FFD700' if es_vor else '#00FFFF'
-        radio_punto = 3.0 if es_vor else 1.5
-        
-        # Círculo base para el punto
-        folium.CircleMarker(
-            location=[lat, lon],
-            radius=radio_punto, 
-            color=color_punto, 
-            weight=1.5 if es_vor else 1.0,
-            fill=True, 
-            fill_color=color_punto,
-            fill_opacity=0.9 if es_vor else 0.6, 
-            tooltip=nombre_original
-        ).add_to(capa_waypoints)
-        
-        # Etiqueta visible permanentemente SÓLO para las radioayudas
-        if es_vor:
+        if tipo == 'VOR / Radioayuda' and mostrar_vors:
+            folium.CircleMarker(
+                location=[lat, lon], radius=3.5, color="#FFC107", weight=1.5,
+                fill=True, fill_color="#FFC107", fill_opacity=0.9, 
+                tooltip=f"VOR: {designador}"
+            ).add_to(capa_navaids)
+            
+            # Etiqueta limpia solo con las letras
             folium.map.Marker(
                 [lat, lon],
                 icon=folium.DivIcon(
-                    icon_size=(40, 15), 
-                    icon_anchor=(20, -7), # Posicionado ligeramente abajo del marcador
-                    html=f'<div style="font-size: 8pt; color: #FFD700; font-weight: bold; text-shadow: 1px 1px 2px black, -1px -1px 2px black, 0px 0px 4px rgba(0,0,0,0.8); text-align: center;">{designador}</div>'
+                    icon_size=(40, 15), icon_anchor=(20, -7),
+                    html=f'<div style="font-size: 8pt; color: #FFC107; font-weight: bold; text-shadow: 1px 1px 2px black, -1px -1px 2px black, 0px 0px 4px rgba(0,0,0,0.8); text-align: center;">{designador}</div>'
                 )
-            ).add_to(capa_waypoints)
+            ).add_to(capa_navaids)
             
-    capa_waypoints.add_to(m)
+        elif tipo == 'Waypoint' and mostrar_waypoints:
+            folium.CircleMarker(
+                location=[lat, lon], radius=2.0, color="#00FFFF", weight=1.0,
+                fill=True, fill_color="#00FFFF", fill_opacity=0.6, 
+                tooltip=f"Waypoint: {nombre_completo}"
+            ).add_to(capa_navaids)
+
+capa_navaids.add_to(m)
 
 # --- VENTANAS DE TIEMPO DINÁMICAS (Lanzamiento y Reingreso) ---
 if "Flight-15" in operacion:
@@ -390,13 +396,25 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
         tiempos_activos = rango_launch
         
     coords_estaticas = list(zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)']))
-    centroide = [sum([c[0] for c in coords_estaticas])/len(coords_estaticas), sum([c[1] for c in coords_estaticas])/len(coords_estaticas)]
-    folium.map.Marker(centroide, icon=folium.DivIcon(icon_size=(100,20), icon_anchor=(50,10), html=f'<div style="font-size: 10pt; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; text-align: center;">{label_name}</div>')).add_to(capa_areas)
+    
+    # Cálculo del centroide de las áreas (Ajuste específico para el área 10^-7)
+    lats = [c[0] for c in coords_estaticas]
+    lons = [c[1] for c in coords_estaticas]
+    cent_lat = sum(lats)/len(lats)
+    cent_lon = sum(lons)/len(lons)
+    
+    # Ajuste para bajar la etiqueta de 10^-7 y centrarla mejor en el mapa
+    if "10^-7" in label_name:
+        cent_lat -= 0.6  # La desplazamos un poco hacia el sur (abajo)
+        
+    folium.map.Marker(
+        [cent_lat, cent_lon], 
+        icon=folium.DivIcon(icon_size=(100,20), icon_anchor=(50,10), html=f'<div style="font-size: 10pt; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; text-align: center;">{label_name}</div>')
+    ).add_to(capa_areas)
     
     coords_lon_lat = [[lon, lat] for lat, lon in zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)'])]
     if coords_lon_lat[0] != coords_lon_lat[-1]: coords_lon_lat.append(coords_lon_lat[0])
     
-    # Renderizado directo en las horas correctas
     for t in tiempos_activos:
         features_geojson.append({
             "type": "Feature", "geometry": {"type": "Polygon", "coordinates": [coords_lon_lat]},
