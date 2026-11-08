@@ -30,7 +30,7 @@ def cargar_bases_datos(mision):
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
     
-    # --- INYECCIÓN DE VORS FALTANTES (REYNOSA, COLIMA, TUXTLA, CJS, BCO, GYM, TTM) ---
+    # --- INYECCIÓN DE VORS FALTANTES ---
     vores_faltantes = pd.DataFrame([
         {'Nombre del Punto / Waypoint': 'REYNOSA', 'Latitud (Decimal)': 26.0104, 'Longitud (Decimal)': -98.2285},
         {'Nombre del Punto / Waypoint': 'COLIMA', 'Latitud (Decimal)': 19.2770, 'Longitud (Decimal)': -103.5775},
@@ -41,7 +41,13 @@ def cargar_bases_datos(mision):
         {'Nombre del Punto / Waypoint': 'NORIA', 'Latitud (Decimal)': 26.3150, 'Longitud (Decimal)': -100.1200}
     ])
     df_wp = pd.concat([df_wp, vores_faltantes], ignore_index=True)
-    # --------------------------------------------------------------------------
+
+    # B. Aerovías
+    try:
+        df_aerovias = pd.read_excel("Coordenadas_Waypoints_ENR_3.3.xlsx", sheet_name="Aerovias_Waypoints")
+        df_aerovias.columns = df_aerovias.columns.str.strip()
+    except Exception:
+        df_aerovias = pd.DataFrame()
 
     # Diccionario Oficial de VORs en México (Actualizado)
     MAPA_VORS_MEXICO = {
@@ -77,7 +83,6 @@ def cargar_bases_datos(mision):
 
     def clasificar_punto(row):
         s = str(row['Nombre del Punto / Waypoint']).strip().upper()
-        # Verificar si coincide exactamente o parcialmente con el diccionario de VORs
         for k in MAPA_VORS_MEXICO.keys():
             if k in s or s in k: return 'VOR / Radioayuda'
         if 'VOR' in s or 'NDB' in s or 'DME' in s or 'TACAN' in s or 'VORTAC' in s:
@@ -152,7 +157,7 @@ def cargar_bases_datos(mision):
                 return None
             df_timeline['hora_utc'] = df_timeline.apply(normalizar_hora, axis=1)
     
-    return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos, df_timeline
+    return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos, df_timeline, df_aerovias
 
 def decodificar_coordenada_ruta(string_punto):
     match = re.match(r'^(\d{2})(\d{2})[Nn](\d{3})(\d{2})[Ww]$', str(string_punto).strip())
@@ -182,7 +187,7 @@ if operacion == "Upcoming launches...":
     st.stop()
 
 # --- CARGA DINÁMICA DE DATOS ---
-df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline = cargar_bases_datos(operacion)
+df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_aerovias = cargar_bases_datos(operacion)
 
 st.sidebar.title("🎛️ Map Control Panel")
 st.sidebar.markdown("### Capas de Espacio Aéreo")
@@ -205,6 +210,7 @@ else:
 mostrar_10_7 = st.sidebar.checkbox("10^-7 Area MMFR", value=True)
 
 st.sidebar.markdown("### Flight Data & Navigation")
+mostrar_aerovias = st.sidebar.checkbox("Airways", value=False)
 mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=False)
 mostrar_vors = st.sidebar.checkbox("Mostrar VORs / Radioayudas", value=True)
 mostrar_waypoints = st.sidebar.checkbox("Mostrar Waypoints (Fijos)", value=False)
@@ -294,7 +300,7 @@ except Exception as e:
         else:
             dict_espacio_procesado[nombre_hoja] = {'Sector': df_sheet}
 
-# LAYER 1: Airspace Boundaries (SIN tooltips ruidosos al hacer clic en áreas vacías)
+# LAYER 1: Airspace Boundaries
 capa_espacio = folium.FeatureGroup(name="Airspace Boundaries")
 for nombre_hoja, sectores in dict_espacio_procesado.items():
     is_fir = "FIR" in nombre_hoja
@@ -339,6 +345,44 @@ for nombre_hoja, sectores in dict_espacio_procesado.items():
                 )
             ).add_to(capa_espacio)
 capa_espacio.add_to(m)
+
+# LAYER 1.5: AIRWAYS (Aerovias_Waypoints)
+capa_aerovias = folium.FeatureGroup(name="Airways", show=mostrar_aerovias)
+if mostrar_aerovias and not df_aerovias.empty:
+    df_aerovias.columns = df_aerovias.columns.str.strip()
+    # Identificar posibles nombres de columnas para aerovía y waypoints/coordenadas
+    col_aerovia = next((c for c in df_aerovias.columns if 'aerov' in c.lower() or 'route' in c.lower() or 'designador' in c.lower() or 'id' in c.lower()), df_aerovias.columns[0])
+    
+    # Agrupamos por aerovía si existe una columna identificadora, de lo contrario trazamos por pares o segmentos
+    for nombre_aerovía, grupo in df_aerovias.groupby(col_aerovia):
+        puntos_aerovia = []
+        for _, row in grupo.iterrows():
+            # Buscar lat/lon directamente en el dataframe o buscar en dicc_wp si hay nombres de puntos
+            lat = None
+            lon = None
+            for c in grupo.columns:
+                if 'lat' in c.lower(): lat = row[c]
+                if 'lon' in c.lower() or 'lng' in c.lower(): lon = row[c]
+            
+            if pd.notnull(lat) and pd.notnull(lon):
+                puntos_aerovia.append((float(lat), float(lon)))
+            else:
+                # Buscar por nombre de waypoint en las columnas de texto
+                for c in grupo.columns:
+                    val_str = str(row[c]).strip()
+                    if val_str in dicc_waypoints:
+                        puntos_aerovia.append(dicc_waypoints[val_str])
+                        break
+        
+        if len(puntos_aerovia) > 1:
+            folium.PolyLine(
+                locations=puntos_aerovia,
+                color="#00FFFF",
+                weight=0.8,
+                opacity=0.6,
+                tooltip=f"Airway: {nombre_aerovía}"
+            ).add_to(capa_aerovias)
+capa_aerovias.add_to(m)
 
 # LAYER 2: VORs y Waypoints Separados
 capa_navaids = folium.FeatureGroup(name="Waypoints & Radioayudas")
