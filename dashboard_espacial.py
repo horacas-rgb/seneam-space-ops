@@ -123,8 +123,13 @@ def cargar_bases_datos(mision):
             df_c3.columns = df_c3.columns.str.strip()
             df_c3 = df_c3.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
             df_c3['Área / Hazard Zone'] = 'AHA-C3'
+
+            df_c4 = pd.read_excel(archivo_areas, sheet_name="AHA_C4_US", header=3)
+            df_c4.columns = df_c4.columns.str.strip()
+            df_c4 = df_c4.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
+            df_c4['Área / Hazard Zone'] = 'AHA-C4-US'
             
-            df_areas = pd.concat([df_areas, df_c2, df_c3], ignore_index=True)
+            df_areas = pd.concat([df_areas, df_c2, df_c3, df_c4], ignore_index=True)
         except Exception:
             pass
     
@@ -333,7 +338,7 @@ mostrar_dra = st.sidebar.checkbox("DRA-1 Area", value=True)
 mostrar_aha = st.sidebar.checkbox("Launch Hazard Areas (AHA-A3 & AHA-B1)", value=True)
 
 if "Flight-15" in operacion:
-    mostrar_aha_reentry = st.sidebar.checkbox("Reentry Hazard Areas (AHA-C2 & AHA-C3)", value=True)
+    mostrar_aha_reentry = st.sidebar.checkbox("Reentry Hazard Areas (AHA-C2 (MMFR), AHA-C3 (MMFR) & AHA-C4-US)", value=True)
 else:
     mostrar_aha_reentry = False
 
@@ -556,9 +561,14 @@ capa_areas = folium.FeatureGroup(name="Space Hazard Areas")
 for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_capas):
     area_str = str(area).upper()
     
-    if "C2" in area_str or "C3" in area_str:
+    if "C2" in area_str or "C3" in area_str or "C4" in area_str:
         if not mostrar_aha_reentry: continue
-        color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C2" if "C2" in area_str else "AHA-C3"
+        if "C2" in area_str:
+            color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C2"
+        elif "C3" in area_str:
+            color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C3"
+        else:
+            color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C4-US"
         tiempos_activos = rango_reentry
     elif "TFR" in area_str:
         if not mostrar_tfr: continue
