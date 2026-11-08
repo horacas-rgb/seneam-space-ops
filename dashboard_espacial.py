@@ -6,8 +6,7 @@ import pandas as pd
 import re
 import os
 import base64
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime, timedelta, timezone
 import requests
 
 # 1. Configuración de la Página Ejecutiva
@@ -255,7 +254,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Contenedor dinámico de los relojes
 reloj_placeholder = st.empty()
 
 operaciones = [
@@ -649,7 +647,7 @@ for t in rango_liftoff:
         "properties": {"times": [int(t_shift.timestamp() * 1000)], "icon": "circle", "iconstyle": {"fillColor": "#FF4500", "fillOpacity": 1.0, "stroke": "true", "color": "#FFFFFF", "weight": 2.5, "radius": 10}, "popup": f"<b>Starbase Boca Chica, TX</b><br>{banner_text} Launch Site"}
     })
     features_geojson.append({
-        "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_boca_chica, lon_boca_chica + 0.35]}, # Nota: mantenido como en tu código original
+        "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_boca_chica, lon_boca_chica + 0.35]},
         "properties": {"times": [int(t_shift.timestamp() * 1000)], "icon": "marker", "iconstyle": {"iconUrl": icon_url_banner, "iconSize": [320, 45], "iconAnchor": [160, 22]}}
     })
 
@@ -661,10 +659,11 @@ TimestampedGeoJson(
 
 folium.LayerControl().add_to(m)
 
-# Renderizado de los relojes nativos en Streamlit (fuera del iframe de Folium)
-now_utc = datetime.now(pytz.utc).strftime('%H:%M:%S')
-now_cdmx = datetime.now(pytz.timezone('America/Mexico_City')).strftime('%H:%M:%S')
-now_mzt = datetime.now(pytz.timezone('America/Mazatlan')).strftime('%H:%M:%S')
+# Renderizado de los relojes nativos en Streamlit (con zonas horarias basadas en UTC estándar)
+utc_now = datetime.now(timezone.utc)
+now_utc = utc_now.strftime('%H:%M:%S')
+now_cdmx = (utc_now - timedelta(hours=6)).strftime('%H:%M:%S')
+now_mzt = (utc_now - timedelta(hours=7)).strftime('%H:%M:%S')
 
 reloj_placeholder.markdown(f"""
 <div class="clock-container">
