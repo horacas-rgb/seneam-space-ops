@@ -30,23 +30,55 @@ def cargar_bases_datos(mision):
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
     
-    # Procesar y clasificar Puntos desde la carga
-    def clasificar_punto(row):
-        s = str(row['Nombre del Punto / Waypoint']).strip().upper()
-        if 'VOR' in s or 'NDB' in s or 'DME' in s or 'TACAN' in s or 'VORTAC' in s:
-            return 'VOR / Radioayuda'
-        # Si tiene 3 letras y no contiene la palabra VOR, también es radioayuda
-        partes = s.split()
-        if partes and len(partes[0]) <= 3 and partes[0].isalpha():
-            return 'VOR / Radioayuda'
-        return 'Waypoint'
+    # --- INYECCIÓN DE VORS FALTANTES (REYNOSA Y COLIMA) ---
+    vores_faltantes = pd.DataFrame([
+        {'Nombre del Punto / Waypoint': 'REYNOSA', 'Latitud (Decimal)': 26.0104, 'Longitud (Decimal)': -98.2285},
+        {'Nombre del Punto / Waypoint': 'COLIMA', 'Latitud (Decimal)': 19.2770, 'Longitud (Decimal)': -103.5775}
+    ])
+    df_wp = pd.concat([df_wp, vores_faltantes], ignore_index=True)
+    # -------------------------------------------------------
+
+    # Diccionario Oficial de VORs en México para evitar nombres largos
+    MAPA_VORS_MEXICO = {
+        "TIJUANA": "TIJ", "MEXICALI": "MXL", "PEÑASCO": "PPE", "HERMOSILLO": "HMO",
+        "OBREGON": "CEN", "OBREGÓN": "CEN", "LORETO": "LTO", "MOCHIS": "LMM",
+        "CULIACAN": "CUL", "CULIACÁN": "CUL", "LA PAZ": "LAP", "CABOS": "SJD", "LUCAS": "CSL",
+        "MAZATLAN": "MZT", "MAZATLÁN": "MZT", "DURANGO": "DGO", "ZACATECAS": "ZCL",
+        "AGUASCALIENTES": "AGU", "LEON": "BJX", "LEÓN": "BJX", "VALLARTA": "PVR",
+        "GUADALAJARA": "GDL", "QUERETARO": "QET", "QUERÉTARO": "QET", "MANZANILLO": "ZLO",
+        "URUAPAN": "UPN", "MORELIA": "MLM", "ZIHUATANEJO": "ZIH", "ACAPULCO": "ACA",
+        "MEXICO": "MEX", "MÉXICO": "MEX", "PUEBLA": "PBC", "TEQUESQUITENGO": "TEQ",
+        "VERACRUZ": "VER", "OAXACA": "OAX", "IXTEPEC": "IZT", "HUATULCO": "HUX",
+        "TAPACHULA": "TAP", "MINATITLAN": "MTT", "MINATITLÁN": "MTT", "VILLAHERMOSA": "VSA",
+        "CARMEN": "CME", "CAMPECHE": "CPE", "MERIDA": "MID", "MÉRIDA": "MID",
+        "KAUA": "CZA", "CANCUN": "CUN", "CANCÚN": "CUN", "COZUMEL": "CZM",
+        "TULUM": "TQO", "CHETUMAL": "CTM", "TAMPICO": "TAM", "VICTORIA": "CVM",
+        "MONTERREY": "MTY", "SALTILLO": "SLW", "TORREON": "TRC", "TORREÓN": "TRC",
+        "MONCLOVA": "MOV", "ALLENDE": "ALL", "CONCEPCION": "CDR", "CONCEPCIÓN": "CDR",
+        "MATAMOROS": "MAM", "NUEVO LAREDO": "NLD", "REYNOSA": "REX", "COLIMA": "COL",
+        "POZA RICA": "PAZ", "TUXPAN": "TUX", "ESCONDIDO": "PXM", "TOLUCA": "TLC", "TUXTLA": "TGZ"
+    }
 
     def obtener_codigo(row):
         s = str(row['Nombre del Punto / Waypoint']).strip().upper()
-        # Limpiar palabras genéricas
-        s = re.sub(r'\b(VOR|NDB|DME|TACAN|VORTAC|ILS)\b', '', s).strip()
-        partes = s.split()
-        return partes[0] if partes else ""
+        # 1. Si el código ya viene entre paréntesis ej. CHETUMAL(CTM)
+        match = re.search(r'\(([A-Z]{3})\)', s)
+        if match: return match.group(1)
+        # 2. Buscar en el diccionario oficial SENEAM
+        for k in sorted(MAPA_VORS_MEXICO.keys(), key=len, reverse=True):
+            if k in s: return MAPA_VORS_MEXICO[k]
+        # 3. Limpieza por defecto
+        s_limpio = re.sub(r'\b(VOR|NDB|DME|TACAN|VORTAC|ILS)\b', '', s).strip()
+        partes = s_limpio.split()
+        return partes[0][:3] if partes else ""
+
+    def clasificar_punto(row):
+        s = str(row['Nombre del Punto / Waypoint']).strip().upper()
+        for k in MAPA_VORS_MEXICO.keys():
+            if k in s: return 'VOR / Radioayuda'
+        if 'VOR' in s or 'NDB' in s or 'DME' in s or 'TACAN' in s or 'VORTAC' in s:
+            return 'VOR / Radioayuda'
+        return 'Waypoint'
 
     df_wp['Tipo'] = df_wp.apply(clasificar_punto, axis=1)
     df_wp['Codigo_Limpio'] = df_wp.apply(obtener_codigo, axis=1)
@@ -56,7 +88,7 @@ def cargar_bases_datos(mision):
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
     ).to_dict()
     
-    # B. Hazard Areas (Consolidado + Reingreso C2/C3 si es FLT15)
+    # B. Hazard Areas
     df_areas = pd.read_excel(archivo_areas, sheet_name="Consolidado_Areas", header=3)
     df_areas.columns = df_areas.columns.str.strip()
     df_areas = df_areas.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
@@ -322,7 +354,7 @@ if not df_waypoints.empty:
                 tooltip=f"VOR: {designador}"
             ).add_to(capa_navaids)
             
-            # Etiqueta limpia solo con las letras
+            # Etiqueta visual de 3 letras
             folium.map.Marker(
                 [lat, lon],
                 icon=folium.DivIcon(
@@ -404,7 +436,7 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
     
     # Ajuste para bajar la etiqueta de 10^-7 y centrarla mejor en el mapa
     if "10^-7" in label_name:
-        cent_lat -= 0.6  # La desplazamos un poco hacia el sur (abajo)
+        cent_lat -= 0.6  
         
     folium.map.Marker(
         [cent_lat, cent_lon], 
