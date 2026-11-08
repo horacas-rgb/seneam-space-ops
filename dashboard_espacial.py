@@ -464,4 +464,14 @@ for t in rango_liftoff:
     })
     features_geojson.append({
         "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_boca_chica, lat_boca_chica + 0.35]},
-        "properties": {"times": [int(t_shift.timestamp() *
+        "properties": {"times": [int(t_shift.timestamp() * 1000)], "icon": "marker", "iconstyle": {"iconUrl": icon_url_banner, "iconSize": [320, 45], "iconAnchor": [160, 22]}}
+    })
+
+TimestampedGeoJson(
+    {"type": "FeatureCollection", "features": features_geojson},
+    period="PT1M", duration="PT1M", add_last_point=False, auto_play=True,
+    loop=True, max_speed=5, loop_button=True, time_slider_drag_update=True, transition_time=333,
+).add_to(m)
+
+folium.LayerControl().add_to(m)
+st_folium(m, width=1400, height=750, returned_objects=[])
