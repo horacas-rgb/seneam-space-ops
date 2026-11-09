@@ -353,11 +353,137 @@ mostrar_vors = st.sidebar.checkbox("Show VORs / Navaids", value=True)
 mostrar_waypoints = st.sidebar.checkbox("Show Waypoints (Fixes)", value=False)
 
 if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeline.columns:
-    st.markdown("""<div style="background-color: #1F2937; padding: 15px; border-radius: 10px; border: 1px solid #374151; margin-bottom: 20px;"><h4 style="color: #39FF14; margin-top: 0;">⏱️ Critical Timeline Events (UTC)</h4><ul style="color: #E5E7EB; font-size: 0.95rem; margin-bottom: 0;">""", unsafe_allow_html=True)
+    eventos_html = ""
     for _, fila in df_timeline.iterrows():
         if 'evento' in df_timeline.columns and pd.notnull(fila['hora_utc']):
-            st.markdown(f"<li><b>{fila['hora_utc'].strftime('%Y-%m-%d %H:%M:%S')}</b> - {fila['evento']}</li>", unsafe_allow_html=True)
-    st.markdown("</ul></div>", unsafe_allow_html=True)
+            eventos_html += f"<li><b>{fila['hora_utc'].strftime('%Y-%m-%d %H:%M:%S')}</b> - {fila['evento']}</li>"
+
+    timeline_countdown_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        body {{
+            background-color: transparent;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: #E5E7EB;
+        }}
+        .tc-container {{
+            display: flex;
+            gap: 20px;
+            background-color: #1F2937;
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #374151;
+            box-sizing: border-box;
+            align-items: stretch;
+        }}
+        .timeline-box {{
+            flex: 1;
+            overflow-y: auto;
+            max-height: 180px;
+        }}
+        .timeline-box h4 {{
+            color: #39FF14;
+            margin-top: 0;
+            margin-bottom: 10px;
+            font-size: 1.05rem;
+        }}
+        .timeline-box ul {{
+            margin: 0;
+            padding-left: 20px;
+            font-size: 0.9rem;
+        }}
+        .countdowns-column {{
+            width: 360px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            justify-content: space-between;
+        }}
+        .countdown-card {{
+            background-color: #111827;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            padding: 10px 14px;
+            text-align: center;
+            font-family: monospace;
+        }}
+        .countdown-title {{
+            font-size: 0.75rem;
+            font-weight: bold;
+            color: #9CA3AF;
+            margin-bottom: 4px;
+        }}
+        .countdown-timer {{
+            font-size: 1.15rem;
+            font-weight: bold;
+            color: #39FF14;
+            letter-spacing: 0.5px;
+        }}
+    </style>
+    </head>
+    <body>
+    <div class="tc-container">
+        <div class="timeline-box">
+            <h4>Critical Timeline Events (UTC)</h4>
+            <ul>
+                {eventos_html}
+            </ul>
+        </div>
+        <div class="countdowns-column">
+            <div class="countdown-card">
+                <div class="countdown-title">Time to Launch (T-0)</div>
+                <div id="countdown_launch" class="countdown-timer">--d --h --m --s</div>
+            </div>
+            <div class="countdown-card">
+                <div class="countdown-title">Time to Reentry (Return to Launch Site)</div>
+                <div id="countdown_reentry" class="countdown-timer">--d --h --m --s</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const launchDate = new Date("2026-11-13T16:45:00Z").getTime();
+        const reentryDate = new Date("2026-11-14T14:56:00Z").getTime();
+
+        function updateCountdowns() {{
+            const now = new Date().getTime();
+
+            // Launch Countdown
+            const diffLaunch = launchDate - now;
+            document.getElementById('countdown_launch').innerText = formatTimeDiff(diffLaunch);
+
+            // Reentry Countdown
+            const diffReentry = reentryDate - now;
+            document.getElementById('countdown_reentry').innerText = formatTimeDiff(diffReentry);
+        }}
+
+        function formatTimeDiff(diff) {{
+            if (diff <= 0) {{
+                return "00d 00h 00m 00s (T+)";
+            }}
+            const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+            return String(days).padStart(2, '0') + "d " +
+                   String(hours).padStart(2, '0') + "h " +
+                   String(minutes).padStart(2, '0') + "m " +
+                   String(seconds).padStart(2, '0') + "s";
+        }}
+
+        setInterval(updateCountdowns, 1000);
+        updateCountdowns();
+    </script>
+    </body>
+    </html>
+    """
+
+    components.html(timeline_countdown_html, height=210)
+
 
 m = folium.Map(location=[24.5, -93.0], zoom_start=5, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", attr="Tiles &copy; Esri")
 
