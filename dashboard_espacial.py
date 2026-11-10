@@ -16,7 +16,6 @@ AJUSTE_UTC = 6
 
 @st.cache_data(show_spinner=False)
 def cargar_bases_datos(mision):
-    # Selección dinámica de bases de datos según la Misión
     if "Flight-15" in mision:
         archivo_areas = "Coordenadas_Starship_FLT15.xlsx"
         archivo_vuelos = "ROCKET_13_NOV_2026.xlsx"
@@ -26,12 +25,10 @@ def cargar_bases_datos(mision):
         archivo_vuelos = "ROCKET_28_SEPT_2026.xlsx"
         fecha_mision = "2026-09-28"
 
-    # A. Waypoints y VORs
     df_wp = pd.read_excel("Coordenadas_Waypoints_ENR_3.3.xlsx", sheet_name="Waypoints_Unicos", header=3)
     df_wp.columns = df_wp.columns.str.strip()
     df_wp = df_wp.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
     
-    # --- INYECCIÓN DE VORS FALTANTES ---
     vores_faltantes = pd.DataFrame([
         {'Nombre del Punto / Waypoint': 'REYNOSA', 'Latitud (Decimal)': 26.0104, 'Longitud (Decimal)': -98.2285},
         {'Nombre del Punto / Waypoint': 'COLIMA', 'Latitud (Decimal)': 19.2770, 'Longitud (Decimal)': -103.5775},
@@ -43,7 +40,6 @@ def cargar_bases_datos(mision):
     ])
     df_wp = pd.concat([df_wp, vores_faltantes], ignore_index=True)
 
-    # B. Aerovías / Rutas RNAV y ATS
     try:
         df_rnav = pd.read_excel("Coordenadas_Waypoints_ENR_3.3.xlsx", sheet_name="Aerovias_Waypoints")
     except Exception:
@@ -59,7 +55,6 @@ def cargar_bases_datos(mision):
     except Exception:
         df_ats_low = pd.DataFrame()
 
-    # Diccionario Oficial de VORs en México
     MAPA_VORS_MEXICO = {
         "TIJUANA": "TIJ", "MEXICALI": "MXL", "PEÑASCO": "PPE", "HERMOSILLO": "HMO",
         "OBREGON": "CEN", "OBREGÓN": "CEN", "LORETO": "LTO", "MOCHIS": "LMM",
@@ -107,7 +102,6 @@ def cargar_bases_datos(mision):
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
     ).to_dict()
     
-    # C. Hazard Areas
     df_areas = pd.read_excel(archivo_areas, sheet_name="Consolidado_Areas", header=3)
     df_areas.columns = df_areas.columns.str.strip()
     df_areas = df_areas.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
@@ -133,7 +127,6 @@ def cargar_bases_datos(mision):
         except Exception as e:
             print("Error cargando áreas de reingreso:", e)
     
-    # D. Espacio Aéreo SENEAM
     xls_espacio = pd.ExcelFile("Coordenadas_Espacio_Aereo_SENEAM.xlsx")
     dict_espacio = {}
     for sheet in xls_espacio.sheet_names:
@@ -142,7 +135,6 @@ def cargar_bases_datos(mision):
             df_sector.columns = df_sector.columns.str.strip()
             dict_espacio[sheet] = df_sector.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
         
-    # E. Vuelos y Línea de Tiempo
     xls_vuelos = pd.ExcelFile(archivo_vuelos)
     df_vuelos = pd.read_excel(xls_vuelos, sheet_name=xls_vuelos.sheet_names[0])
     df_vuelos.columns = df_vuelos.columns.str.strip()
@@ -230,7 +222,7 @@ with col2:
     if os.path.exists("Seneam_Logo.png"): st.image("Seneam_Logo.png", use_container_width=True)
 
 # -------------------------------------------------------------------------
-# BARRA SUPERIOR DE RELOJES EN TIEMPO REAL (COMPONENTE AISLADO SEGURO)
+# BARRA SUPERIOR DE RELOJES EN TIEMPO REAL
 # -------------------------------------------------------------------------
 components.html("""
 <!DOCTYPE html>
@@ -450,12 +442,8 @@ if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeli
 
         function updateCountdowns() {{
             const now = new Date().getTime();
-
-            // Launch Countdown
             const diffLaunch = launchDate - now;
             document.getElementById('countdown_launch').innerText = formatTimeDiff(diffLaunch);
-
-            // Reentry Countdown
             const diffReentry = reentryDate - now;
             document.getElementById('countdown_reentry').innerText = formatTimeDiff(diffReentry);
         }}
@@ -481,9 +469,7 @@ if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeli
     </body>
     </html>
     """
-
     components.html(timeline_countdown_html, height=210)
-
 
 m = folium.Map(location=[24.5, -93.0], zoom_start=5, tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", attr="Tiles &copy; Esri")
 
@@ -529,7 +515,8 @@ try:
     idx_xcalak = find_closest_index(-87.75, 18.15, coords_fisicas)
     south_line = extract_line_string(idx_tap, idx_xcalak, coords_fisicas)
 
-    def is_on_line(lon, lat, line_coords, threshold=0.8):
+    # UMBRAL AMPLIADO A 3.0 PARA CTA MAZATLÁN Y OTRAS CAPAS
+    def is_on_line(lon, lat, line_coords, threshold=3.0):
         if not line_coords: return False
         return min(distance_geo([lon, lat], p) for p in line_coords) < threshold
 
@@ -657,7 +644,7 @@ if not df_waypoints.empty:
 
 capa_navaids.add_to(m)
 
-# --- VENTANAS DE TIEMPO DINÁMICAS (Lanzamiento y Reingreso) ---
+# --- VENTANAS DE TIEMPO DINÁMICAS ---
 if "Flight-15" in operacion:
     rango_launch = list(pd.date_range(start=pd.to_datetime("2026-11-13 20:45:00"), end=pd.to_datetime("2026-11-14 00:40:00"), freq='1min'))
     rango_reentry = list(pd.date_range(start=pd.to_datetime("2026-11-14 20:56:00"), end=pd.to_datetime("2026-11-15 00:14:00"), freq='1min'))
@@ -744,7 +731,6 @@ capa_areas.add_to(m)
 capa_rutas = folium.FeatureGroup(name="Static Trajectories", show=mostrar_rutas)
 for _, vuelo in df_vuelos.iterrows():
     puntos_validos = []
-    
     entry_pt = vuelo.get('entry_point')
     exit_pt = vuelo.get('exit_point')
     route_str = str(vuelo.get('route', ''))
