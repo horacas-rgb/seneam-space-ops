@@ -529,7 +529,8 @@ try:
     idx_xcalak = find_closest_index(-87.75, 18.15, coords_fisicas)
     south_line = extract_line_string(idx_tap, idx_xcalak, coords_fisicas)
 
-    def is_on_line(lon, lat, line_coords, threshold=0.8):
+    # Umbral actualizado a 2.5 para mayor tolerancia en los vértices del sector
+    def is_on_line(lon, lat, line_coords, threshold=2.5):
         if not line_coords: return False
         return min(distance_geo([lon, lat], p) for p in line_coords) < threshold
 
