@@ -445,8 +445,8 @@ if df_timeline is not None and not df_timeline.empty and 'hora_utc' in df_timeli
     </div>
 
     <script>
-        const launchDate = new Date("2026-11-13T16:45:00Z").getTime();
-        const reentryDate = new Date("2026-11-14T14:56:00Z").getTime();
+        const launchDate = new Date("2026-11-13T22:45:00Z").getTime();
+        const reentryDate = new Date("2026-11-14T20:56:00Z").getTime();
 
         function updateCountdowns() {{
             const now = new Date().getTime();
