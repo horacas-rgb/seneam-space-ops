@@ -115,6 +115,23 @@ def cargar_bases_datos(mision, cache_buster=0):
         base_token = k_up.split()[0] if k_up.split() else ""
         if base_token and base_token not in dicc_wp_norm:
             dicc_wp_norm[base_token] = val
+
+    # Enriquecer dicc_wp_norm con puntos presentes en tablas RNAV y ATS
+    for df_ruta_aux in [df_rnav, df_ats_hi, df_ats_low]:
+        if df_ruta_aux is not None and not df_ruta_aux.empty:
+            cols_aux = [c.strip() for c in df_ruta_aux.columns]
+            lat_col = next((c for c in cols_aux if 'lat' in c.lower()), None)
+            lon_col = next((c for c in cols_aux if 'lon' in c.lower() or 'lng' in c.lower()), None)
+            pt_col = next((c for c in cols_aux if any(w in c.lower() for w in ['waypoint', 'punto', 'fix', 'designator', 'ident'])), None)
+            if lat_col and lon_col and pt_col:
+                for _, r_aux in df_ruta_aux.iterrows():
+                    pt_name = str(r_aux.get(pt_col, '')).strip().upper()
+                    lat_v, lon_v = r_aux.get(lat_col), r_aux.get(lon_col)
+                    if pt_name and pt_name not in dicc_wp_norm and pd.notnull(lat_v) and pd.notnull(lon_v):
+                        try:
+                            dicc_wp_norm[pt_name] = (float(lat_v), float(lon_v))
+                        except ValueError:
+                            pass
     
     # C. Hazard Areas
     df_areas = pd.read_excel(archivo_areas, sheet_name="Consolidado_Areas", header=3)
@@ -213,20 +230,88 @@ def decodificar_coordenada_ruta(string_punto):
 
     return None
 
+def es_aerovia_o_procedimiento(token_upper):
+    # Aerovías ATS / RNAV comunes (ej. A509, A552, A699, A766, A770, J12, Q100, T290, V1, UL..., UJ..., UT..., UM..., UW...)
+    if re.match(r'^(UL|UJ|UT|UM|UW|A|B|G|R|J|Q|T|V|M|N|L|K|H|W|Z)\d{1,4}[A-Z]?$', token_upper):
+        return True
+    # Procedimientos SID/STAR típicos (ej. ABAN4C)
+    if re.match(r'^[A-Z]{3,5}\d[A-Z]$', token_upper):
+        return True
+    return False
+
 def resolver_punto_vuelo(token, dicc_exacto, dicc_norm):
     s = str(token).strip()
     if not s:
         return None
-    # Limpiar posible sufijo ICAO de velocidad/nivel (ej. KENUK/M084F380 -> KENUK)
+    # Limpiar posible sufijo ICAO de velocidad/nivel (ej. ADARA/N0488F370 -> ADARA)
     s_base = s.split('/')[0].strip()
-    if not s_base or s_base.upper() in {"NAN", "NONE", "DCT", "SID", "STAR"}:
+    s_up = s_base.upper()
+    if not s_up or s_up in {"NAN", "NONE", "DCT", "SID", "STAR"}:
+        return None
+    if es_aerovia_o_procedimiento(s_up):
         return None
     if s_base in dicc_exacto:
         return dicc_exacto[s_base]
-    s_up = s_base.upper()
     if s_up in dicc_norm:
         return dicc_norm[s_up]
     return decodificar_coordenada_ruta(s_up)
+
+def obtener_ventana_area_desde_timeline(df_timeline, categoria_area, fallback_tiempos, fallback_inicio, fallback_fin):
+    """
+    Calcula los timestamps activos (frecuencia 1min) para un área de riesgo a partir de df_timeline.
+    Respeta estrictamente las horas de activación y liberación/desactivación para evitar
+    que aparezcan aeronaves dentro de AHAs ya liberadas.
+    """
+    if df_timeline is None or df_timeline.empty or 'hora_utc' not in df_timeline.columns or 'evento' not in df_timeline.columns:
+        return fallback_tiempos
+
+    eventos_validos = df_timeline[pd.notnull(df_timeline['hora_utc'])].sort_values('hora_utc')
+    if eventos_validos.empty:
+        return fallback_tiempos
+
+    def coincide_categoria(texto_ev):
+        t = texto_ev.upper()
+        if categoria_area == "AHA-A3":
+            return "A3" in t
+        if categoria_area == "AHA-B1":
+            return "B1" in t
+        if categoria_area == "AHA-REENTRY":
+            return any(k in t for k in ["C2", "C3", "C4", "REENTRY", "RE-ENTRY"])
+        if categoria_area == "DRA":
+            return "DRA" in t
+        if categoria_area == "TFR":
+            return "TFR" in t
+        if categoria_area == "10^-7":
+            return "10^-7" in t or "10_7" in t or "10-7" in t
+        return False
+
+    inicio_dt = None
+    fin_dt = None
+
+    for _, fila in eventos_validos.iterrows():
+        ev_txt = str(fila['evento']).upper()
+        ts = pd.to_datetime(fila['hora_utc'])
+        if not coincide_categoria(ev_txt):
+            continue
+
+        es_cierre = any(w in ev_txt for w in ["RELEASE", "RELEASED", "LIBERAD", "INACTIVE", "DEACTIVAT", "DESACTIV", "END", "CLOSE", "CLOSED"])
+        es_apertura = any(w in ev_txt for w in ["ACTIVE", "ACTIVAT", "ACTIVAD", "OPEN", "START", "LIFTOFF", "T-0"])
+
+        if es_cierre and (inicio_dt is None or ts >= inicio_dt):
+            fin_dt = ts
+        elif es_apertura and inicio_dt is None:
+            inicio_dt = ts
+
+    if inicio_dt is None and fin_dt is not None and fallback_inicio is not None:
+        inicio_dt = pd.to_datetime(fallback_inicio)
+
+    if inicio_dt is not None and fin_dt is None and fallback_fin is not None:
+        fin_dt = pd.to_datetime(fallback_fin)
+
+    if inicio_dt is not None and fin_dt is not None and fin_dt >= inicio_dt:
+        return list(pd.date_range(start=inicio_dt, end=fin_dt, freq='1min'))
+
+    return fallback_tiempos
 
 def agregar_capa_rutas(df_rutas, capa, color_base, prefijo_tooltip, dicc_wp):
     if df_rutas is not None and not df_rutas.empty:
@@ -731,7 +816,7 @@ else:
     rango_liftoff = list(pd.date_range(start=t_liftoff, end=t_end_liftoff, freq='1min'))
     banner_text = "🚀 STARSHIP FLIGHT-14 LIFT OFF"
 
-# LAYER 3: Hazard Areas Animadas
+# LAYER 3: Hazard Areas Animadas según Critical Timeline Events (UTC)
 features_geojson = []
 
 def orden_capas(x):
@@ -753,23 +838,37 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
             color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C3"
         else:
             color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C4"
-        tiempos_activos = rango_reentry
+        fb_ini = rango_reentry[0] if rango_reentry else None
+        fb_fin = rango_reentry[-1] if rango_reentry else None
+        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, "AHA-REENTRY", rango_reentry, fb_ini, fb_fin)
     elif "TFR" in area_str:
         if not mostrar_tfr: continue
         color, opacity_fill, label_name = "#90EE90", 0.35, "TFR"
-        tiempos_activos = rango_launch + rango_reentry
+        rango_tfr_fb = rango_launch + rango_reentry
+        fb_ini = rango_tfr_fb[0] if rango_tfr_fb else None
+        fb_fin = rango_tfr_fb[-1] if rango_tfr_fb else None
+        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, "TFR", rango_tfr_fb, fb_ini, fb_fin)
     elif "DRA" in area_str:
         if not mostrar_dra: continue
         color, opacity_fill, label_name = "#FFB347", 0.35, "DRA-1"
-        tiempos_activos = rango_launch
+        fb_ini = rango_launch[0] if rango_launch else None
+        fb_fin = rango_launch[-1] if rango_launch else None
+        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, "DRA", rango_launch, fb_ini, fb_fin)
     elif "AHA" in area_str:
         if not mostrar_aha: continue
-        color, opacity_fill, label_name = "#FF7F7F", 0.55, "AHA-A3" if "A3" in area_str else "AHA-B1"
-        tiempos_activos = rango_launch
+        if "A3" in area_str:
+            color, opacity_fill, label_name, cat_aha = "#FF7F7F", 0.55, "AHA-A3", "AHA-A3"
+        else:
+            color, opacity_fill, label_name, cat_aha = "#FF7F7F", 0.55, "AHA-B1", "AHA-B1"
+        fb_ini = rango_launch[0] if rango_launch else None
+        fb_fin = rango_launch[-1] if rango_launch else None
+        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, cat_aha, rango_launch, fb_ini, fb_fin)
     elif "10^-7" in area_str or "10_7" in area_str:
         if not mostrar_10_7: continue
         color, opacity_fill, label_name = "#FFFFE0", 0.15, "10^-7"
-        tiempos_activos = rango_launch
+        fb_ini = rango_launch[0] if rango_launch else None
+        fb_fin = rango_launch[-1] if rango_launch else None
+        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, "10^-7", rango_launch, fb_ini, fb_fin)
     else:
         color, opacity_fill, label_name = "#FFA500", 0.35, area
         tiempos_activos = rango_launch
@@ -813,10 +912,11 @@ for idx_vuelo, vuelo in df_vuelos.iterrows():
     
     for p in candidatos:
         p_str = str(p).strip()
+        p_base_up = p_str.split('/')[0].strip().upper()
         coord = resolver_punto_vuelo(p_str, dicc_waypoints, dicc_wp_norm)
         if coord:
             puntos_validos.append(coord)
-        elif p_str.upper() not in {"NAN", "NONE", "DCT"}:
+        elif p_base_up and p_base_up not in {"NAN", "NONE", "DCT", "SID", "STAR"} and not es_aerovia_o_procedimiento(p_base_up):
             tokens_faltantes.add(p_str)
 
     if len(puntos_validos) <= 1:
@@ -829,7 +929,6 @@ for idx_vuelo, vuelo in df_vuelos.iterrows():
         adep = str(vuelo.get('adep', 'N/A'))
         ades = str(vuelo.get('ades', 'N/A'))
 
-        # Traza estática opcional (oculta por defecto para evitar contaminación visual)
         folium.PolyLine(
             locations=[[lat, lon] for lat, lon in puntos_validos],
             color="#39FF14",
