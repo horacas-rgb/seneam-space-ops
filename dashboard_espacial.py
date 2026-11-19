@@ -15,7 +15,7 @@ st.set_page_config(page_title="Space Operations - SENEAM", layout="wide")
 AJUSTE_UTC = 6 
 
 @st.cache_data(show_spinner=False)
-def cargar_bases_datos(mision):
+def cargar_bases_datos(mision, cache_buster=0):
     # Selección dinámica de bases de datos según la Misión
     if "Flight-15" in mision:
         archivo_areas = "Coordenadas_Starship_FLT15.xlsx"
@@ -151,36 +151,44 @@ def cargar_bases_datos(mision):
             dict_espacio[sheet] = df_sector.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
         
     # E. Vuelos y Línea de Tiempo
-    xls_vuelos = pd.ExcelFile(archivo_vuelos)
-    df_vuelos = pd.read_excel(xls_vuelos, sheet_name=xls_vuelos.sheet_names[0])
-    df_vuelos.columns = df_vuelos.columns.str.strip()
-    
-    if 'entry_hour' in df_vuelos.columns:
-        df_vuelos['entry_hour'] = pd.to_datetime(df_vuelos['entry_hour'], errors='coerce')
-    if 'exit_hour' in df_vuelos.columns:
-        df_vuelos['exit_hour'] = pd.to_datetime(df_vuelos['exit_hour'], errors='coerce')
-    
+    error_vuelos = None
+    df_vuelos = pd.DataFrame()
     df_timeline = None
-    if "Timeline" in xls_vuelos.sheet_names:
-        df_timeline = pd.read_excel(xls_vuelos, sheet_name="Timeline")
-        df_timeline.columns = df_timeline.columns.str.strip().str.lower().str.replace(' ', '_')
-        if 'hora_utc' in df_timeline.columns:
-            def normalizar_hora(row):
-                val = row['hora_utc']
-                if pd.isnull(val): return None
-                evento_str = str(row.get('evento', ''))
-                
-                fecha = fecha_mision
-                if "Flight-15" in mision:
-                    if "Nov 14" in evento_str or "Nov 14" in str(val): fecha = "2026-11-14"
-                    elif "Nov 13" in evento_str or "Nov 13" in str(val): fecha = "2026-11-13"
-                
-                match = re.search(r'(\d{1,2}:\d{2}(?::\d{2})?)', str(val))
-                if match: return pd.to_datetime(f"{fecha} {match.group(1)}")
-                return None
-            df_timeline['hora_utc'] = df_timeline.apply(normalizar_hora, axis=1)
+
+    try:
+        xls_vuelos = pd.ExcelFile(archivo_vuelos)
+        hoja_vuelos = "ROCKET_13_NOV_2026" if "ROCKET_13_NOV_2026" in xls_vuelos.sheet_names else xls_vuelos.sheet_names[0]
+        df_vuelos = pd.read_excel(xls_vuelos, sheet_name=hoja_vuelos)
+        df_vuelos.columns = df_vuelos.columns.str.strip()
+        df_vuelos = df_vuelos.dropna(how="all")
+        
+        if 'entry_hour' in df_vuelos.columns:
+            df_vuelos['entry_hour'] = pd.to_datetime(df_vuelos['entry_hour'], errors='coerce')
+        if 'exit_hour' in df_vuelos.columns:
+            df_vuelos['exit_hour'] = pd.to_datetime(df_vuelos['exit_hour'], errors='coerce')
+        
+        if "Timeline" in xls_vuelos.sheet_names:
+            df_timeline = pd.read_excel(xls_vuelos, sheet_name="Timeline")
+            df_timeline.columns = df_timeline.columns.str.strip().str.lower().str.replace(' ', '_')
+            if 'hora_utc' in df_timeline.columns:
+                def normalizar_hora(row):
+                    val = row['hora_utc']
+                    if pd.isnull(val): return None
+                    evento_str = str(row.get('evento', ''))
+                    
+                    fecha = fecha_mision
+                    if "Flight-15" in mision:
+                        if "Nov 14" in evento_str or "Nov 14" in str(val): fecha = "2026-11-14"
+                        elif "Nov 13" in evento_str or "Nov 13" in str(val): fecha = "2026-11-13"
+                    
+                    match = re.search(r'(\d{1,2}:\d{2}(?::\d{2})?)', str(val))
+                    if match: return pd.to_datetime(f"{fecha} {match.group(1)}")
+                    return None
+                df_timeline['hora_utc'] = df_timeline.apply(normalizar_hora, axis=1)
+    except Exception as e:
+        error_vuelos = f"{type(e).__name__}: {e}"
     
-    return df_wp, dicc_wp, dicc_wp_norm, df_areas, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low
+    return df_wp, dicc_wp, dicc_wp_norm, df_areas, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low, error_vuelos
 
 def decodificar_coordenada_ruta(string_punto):
     s = str(string_punto).strip().upper()
@@ -344,10 +352,21 @@ if operacion == "Upcoming launches...":
     st.markdown("""<div style="text-align: center; padding: 40px; background-color: #111827; border-radius: 15px; border: 1px solid #374151;"><h1 style="color: #39FF14; font-size: 2.8rem; margin-bottom: 20px;">🚀 SpaceX Starship Super Heavy Flight-16</h1><h2 style="color: #FFFFFF; font-size: 2rem; font-weight: 400; margin-bottom: 30px;">Upcoming Launch: TBD</h2><p style="color: #9CA3AF; font-size: 1.1rem; margin-bottom: 40px;">Strategic coordination and air traffic flow management (ATFM) for upcoming orbital flight tests.</p><a href="https://www.spacex.com/content/starship-flight-tests" target="_blank" style="background-color: #2563EB; color: white; padding: 15px 30px; border-radius: 8px; text-decoration: none; font-size: 1.2rem; font-weight: bold;">View Official SpaceX Flight Test Portal ↗</a></div>""", unsafe_allow_html=True)
     st.stop()
 
+if "cache_buster" not in st.session_state:
+    st.session_state.cache_buster = 0
+
 # --- CARGA DINÁMICA DE DATOS CON CACHÉ ---
-df_waypoints, dicc_waypoints, dicc_wp_norm, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low = cargar_bases_datos(operacion)
+df_waypoints, dicc_waypoints, dicc_wp_norm, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low, error_vuelos = cargar_bases_datos(operacion, st.session_state.cache_buster)
 
 st.sidebar.title("🎛️ Map Control Panel")
+if st.sidebar.button("🔄 Limpiar caché y recargar datos"):
+    st.cache_data.clear()
+    st.session_state.cache_buster += 1
+    st.rerun()
+
+if error_vuelos:
+    st.sidebar.error(f"Error leyendo vuelos: {error_vuelos}")
+
 st.sidebar.markdown("### Airspace Layers")
 mostrar_firs = st.sidebar.checkbox("Mexico FIR, Mazatlan Oceanic FIR", value=True)
 mostrar_acc_mid = st.sidebar.checkbox("Merida Control Center (MMID ACC)", value=False)
