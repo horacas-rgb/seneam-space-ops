@@ -112,9 +112,17 @@ def cargar_bases_datos(mision, cache_buster=0):
     for k, val in dicc_wp.items():
         k_up = str(k).strip().upper()
         dicc_wp_norm[k_up] = val
-        base_token = k_up.split()[0] if k_up.split() else ""
-        if base_token and base_token not in dicc_wp_norm:
-            dicc_wp_norm[base_token] = val
+        
+        # Extraer designador oficial de 3 letras entre paréntesis (ej. "VOR CANCUN (CUN)" -> "CUN")
+        match_vor = re.search(r'\(([A-Z]{3})\)', k_up)
+        if match_vor:
+            cod_vor = match_vor.group(1)
+            if cod_vor not in dicc_wp_norm:
+                dicc_wp_norm[cod_vor] = val
+        else:
+            base_token = k_up.split()[0] if k_up.split() else ""
+            if base_token and base_token not in {"VOR", "NDB", "DME", "TACAN", "VORTAC", "ILS"} and base_token not in dicc_wp_norm:
+                dicc_wp_norm[base_token] = val
 
     # Enriquecer dicc_wp_norm con puntos presentes en tablas RNAV y ATS
     for df_ruta_aux in [df_rnav, df_ats_hi, df_ats_low]:
@@ -132,6 +140,36 @@ def cargar_bases_datos(mision, cache_buster=0):
                             dicc_wp_norm[pt_name] = (float(lat_v), float(lon_v))
                         except ValueError:
                             pass
+
+    # Vincular indicadores ICAO de aeródromos mexicanos a su VOR de referencia
+    AERODROMOS_VOR_REF = {
+        'MMUN': 'CUN', 'MMMD': 'MID', 'MMMX': 'MEX', 'MMSM': 'SLM', 'MMTL': 'PBC',
+        'MMVA': 'VSA', 'MMCE': 'CME', 'MMCM': 'CTM', 'MMTG': 'TGZ', 'MMIT': 'IZT',
+        'MMTP': 'TAP', 'MMCZ': 'CZM', 'MMVR': 'VER', 'MMOX': 'OAX', 'MMPB': 'PBC',
+        'MMQT': 'QET', 'MMGL': 'GDL', 'MMMY': 'MTY', 'MMTM': 'TAM', 'MMTO': 'TLC',
+        'MMAA': 'ACA', 'MMBT': 'HUX', 'MMPR': 'PVR', 'MMSD': 'SJD', 'MMHO': 'HMO',
+        'MMCU': 'CUU', 'MMCS': 'CJS', 'MMTJ': 'TIJ', 'MMMZ': 'MZT', 'MMLO': 'BJX',
+        'MMCP': 'CPE', 'MMPQ': 'VSA', 'MMAN': 'MTY', 'MMSP': 'SLP', 'MMTC': 'TRC',
+        'MMMM': 'MLM'
+    }
+    for icao_ad, vor_ref in AERODROMOS_VOR_REF.items():
+        if vor_ref in dicc_wp_norm and icao_ad not in dicc_wp_norm:
+            dicc_wp_norm[icao_ad] = dicc_wp_norm[vor_ref]
+
+    # Puntos limítrofes FIR México / Caribe / Centroamérica ausentes en ENR 3.3
+    PUNTOS_LIMITROFES_FIR = {
+        'NUDAL': (21.583333, -86.000000),
+        'NOSAT': (21.733333, -86.000000),
+        'OMATO': (17.163056, -93.923056),
+        'VIDNO': (15.650000, -90.050000),
+        'NUKAN': (19.650000, -86.000000),
+        'MAXIM': (21.250000, -85.150000),
+        'CIGAR': (23.833333, -84.500000),
+        'CANOA': (23.083333, -84.916667),
+    }
+    for pt_lim, coords_lim in PUNTOS_LIMITROFES_FIR.items():
+        if pt_lim not in dicc_wp_norm:
+            dicc_wp_norm[pt_lim] = coords_lim
     
     # C. Hazard Areas
     df_areas = pd.read_excel(archivo_areas, sheet_name="Consolidado_Areas", header=3)
