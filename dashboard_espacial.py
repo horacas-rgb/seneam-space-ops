@@ -6,6 +6,7 @@ from folium.plugins import TimestampedGeoJson
 import pandas as pd
 import re
 import os
+import json
 import base64
 from datetime import timedelta
 import requests
@@ -191,23 +192,38 @@ def cargar_bases_datos(mision, cache_buster=0):
     return df_wp, dicc_wp, dicc_wp_norm, df_areas, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low, error_vuelos
 
 def decodificar_coordenada_ruta(string_punto):
-    s = str(string_punto).strip().upper()
-    match = re.match(r'^(\d{2})(\d{2})\.?(\d*)\s*[Nn]\s*(\d{3})(\d{2})\.?(\d*)\s*[Ww]$', s)
-    if match:
-        lat_deg = int(match.group(1))
-        lat_min = float(f"{match.group(2)}.{match.group(3)}" if match.group(3) else match.group(2))
-        lon_deg = int(match.group(4))
-        lon_min = float(f"{match.group(5)}.{match.group(6)}" if match.group(6) else match.group(5))
-        return (lat_deg + lat_min / 60.0, -(lon_deg + lon_min / 60.0))
+    # Elimina sufijos ICAO de velocidad/nivel como /M084F380 o /N0484F370
+    s = str(string_punto).strip().upper().split('/')[0].strip()
+    
+    # Formato 1: Grados y minutos (ej. 3730N04000W, 2530.5N09710.2W)
+    m1 = re.match(r'^(\d{2})(\d{2})\.?(\d*)\s*([NS])\s*(\d{3})(\d{2})\.?(\d*)\s*([EW])$', s)
+    if m1:
+        lat = int(m1.group(1)) + float(f"{m1.group(2)}.{m1.group(3)}" if m1.group(3) else m1.group(2)) / 60.0
+        if m1.group(4) == 'S': lat = -lat
+        lon = int(m1.group(5)) + float(f"{m1.group(6)}.{m1.group(7)}" if m1.group(7) else m1.group(6)) / 60.0
+        if m1.group(8) == 'W': lon = -lon
+        return (lat, lon)
+
+    # Formato 2: Grados enteros oceánicos (ej. 27N050W, 31N040W, 36N060W)
+    m2 = re.match(r'^(\d{2})\s*([NS])\s*(\d{3})\s*([EW])$', s)
+    if m2:
+        lat = float(m2.group(1)) * (-1 if m2.group(2) == 'S' else 1)
+        lon = float(m2.group(3)) * (-1 if m2.group(4) == 'W' else 1)
+        return (lat, lon)
+
     return None
 
 def resolver_punto_vuelo(token, dicc_exacto, dicc_norm):
     s = str(token).strip()
-    if not s or s.upper() in {"NAN", "NONE", "DCT", "SID", "STAR"}:
+    if not s:
         return None
-    if s in dicc_exacto:
-        return dicc_exacto[s]
-    s_up = s.upper()
+    # Limpiar posible sufijo ICAO de velocidad/nivel (ej. KENUK/M084F380 -> KENUK)
+    s_base = s.split('/')[0].strip()
+    if not s_base or s_base.upper() in {"NAN", "NONE", "DCT", "SID", "STAR"}:
+        return None
+    if s_base in dicc_exacto:
+        return dicc_exacto[s_base]
+    s_up = s_base.upper()
     if s_up in dicc_norm:
         return dicc_norm[s_up]
     return decodificar_coordenada_ruta(s_up)
@@ -390,7 +406,7 @@ st.sidebar.markdown("### Flight Data & Navigation")
 mostrar_rnav = st.sidebar.checkbox("RNAV Routes", value=False)
 mostrar_ats_hi = st.sidebar.checkbox("ATS Routes (HI)", value=False)
 mostrar_ats_low = st.sidebar.checkbox("ATS Routes (LOW)", value=False)
-mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=True)
+mostrar_rutas_todas = st.sidebar.checkbox("Show All Trajectories (Background)", value=False)
 mostrar_vors = st.sidebar.checkbox("Show VORs / Navaids", value=True)
 mostrar_waypoints = st.sidebar.checkbox("Show Waypoints (Fixes)", value=False)
 
@@ -782,12 +798,12 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
         })
 capa_areas.add_to(m)
 
-# LAYER 4: RUTAS DE VUELO Y POPUP DE AERONAVES
-capa_rutas = folium.FeatureGroup(name="Static Trajectories", show=mostrar_rutas)
+# LAYER 4: AERONAVES INTERACTIVAS Y TRAYECTORIAS BAJO DEMANDA
+capa_rutas = folium.FeatureGroup(name="Static Trajectories (Background)", show=mostrar_rutas_todas)
 vuelos_sin_ruta = 0
 tokens_faltantes = set()
 
-for _, vuelo in df_vuelos.iterrows():
+for idx_vuelo, vuelo in df_vuelos.iterrows():
     puntos_validos = []
     
     entry_pt = vuelo.get('entry_point')
@@ -808,7 +824,20 @@ for _, vuelo in df_vuelos.iterrows():
             
     n_pts = len(puntos_validos)
     if n_pts > 1:
-        folium.PolyLine(locations=[[lat, lon] for lat, lon in puntos_validos], color="#39FF14", weight=2.0, opacity=0.85, tooltip=f"<b>Callsign:</b> {vuelo['callsign']} | <b>Route:</b> {vuelo['adep']}-{vuelo['ades']}").add_to(capa_rutas)
+        callsign = str(vuelo.get('callsign', 'N/A'))
+        tipo_aeronave = str(vuelo.get('aircraft_type', 'N/A'))
+        adep = str(vuelo.get('adep', 'N/A'))
+        ades = str(vuelo.get('ades', 'N/A'))
+
+        # Traza estática opcional (oculta por defecto para evitar contaminación visual)
+        folium.PolyLine(
+            locations=[[lat, lon] for lat, lon in puntos_validos],
+            color="#39FF14",
+            weight=1.5,
+            opacity=0.65,
+            tooltip=f"<b>Callsign:</b> {callsign} | <b>ADEP-ADES:</b> {adep}-{ades}"
+        ).add_to(capa_rutas)
+
         t_inicio, t_fin = vuelo['entry_hour'], vuelo['exit_hour']
         if pd.isnull(t_inicio) or pd.isnull(t_fin): continue
         duracion_vuelo_mins = int((t_fin - t_inicio).total_seconds() / 60)
@@ -817,29 +846,17 @@ for _, vuelo in df_vuelos.iterrows():
         paso_tiempo = (t_fin - t_inicio) / (n_pts - 1)
         tiempos_nodos = [t_inicio + paso_tiempo * i for i in range(n_pts)]
         
-        callsign = vuelo.get('callsign', 'N/A')
-        tipo_aeronave = vuelo.get('aircraft_type', 'N/A')
-        adep = vuelo.get('adep', 'N/A')
-        ades = vuelo.get('ades', 'N/A')
-        nivel_vuelo = vuelo.get('entry_level', vuelo.get('rfl', 'N/A'))
-        if pd.notna(nivel_vuelo):
-            nivel_str = f"FL{int(float(nivel_vuelo))}" if str(nivel_vuelo).replace('.','',1).isdigit() else str(nivel_vuelo)
-        else:
-            nivel_str = "N/A"
-        ruta_completa = vuelo.get('route', 'Directo / No especificada')
+        coords_json = json.dumps([[round(lat, 5), round(lon, 5)] for lat, lon in puntos_validos])
 
         popup_html = f"""
-        <div style="font-family: Arial, sans-serif; font-size: 11px; width: 220px; color: #333;">
-            <div style="background-color: #00FFFF; padding: 5px; text-align: center; font-weight: bold; color: #0c2340; border-radius: 3px 3px 0 0;">
+        <div class="flight-popup-data" data-coords='{coords_json}' style="font-family: Arial, sans-serif; font-size: 12px; min-width: 190px; color: #111827;">
+            <div style="background-color: #111827; color: #39FF14; padding: 6px 8px; font-weight: bold; border-radius: 4px 4px 0 0; font-size: 13px;">
                 ✈️ {callsign}
             </div>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 5px;">
-                <tr><td><b>Tipo Aeronave:</b></td><td>{tipo_aeronave}</td></tr>
-                <tr><td><b>ADEP - ADES:</b></td><td>{adep} - {ades}</td></tr>
-                <tr><td><b>Nivel de Vuelo:</b></td><td>{nivel_str}</td></tr>
-            </table>
-            <div style="margin-top: 6px; padding-top: 4px; border-top: 1px solid #ccc; font-size: 10px; word-wrap: break-word;">
-                <b>Ruta:</b> <span style="color: #05508a;">{ruta_completa}</span>
+            <div style="padding: 6px 8px; background-color: #F9FAFB; border: 1px solid #D1D5DB; border-top: none; border-radius: 0 0 4px 4px; line-height: 1.5;">
+                <div><b>Callsign:</b> {callsign}</div>
+                <div><b>ADEP-ADES:</b> {adep}-{ades}</div>
+                <div><b>Aircraft Type:</b> {tipo_aeronave}</div>
             </div>
         </div>
         """
@@ -858,7 +875,8 @@ for _, vuelo in df_vuelos.iterrows():
                         lon_curr, lat_curr = lonA + (lonB - lonA) * fraction, latA + (latB - latA) * fraction
                         
                     features_geojson.append({
-                        "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_curr, lat_curr]},
+                        "type": "Feature",
+                        "geometry": {"type": "Point", "coordinates": [lon_curr, lat_curr]},
                         "properties": {
                             "times": [int((t_current + timedelta(hours=AJUSTE_UTC)).timestamp() * 1000)], 
                             "icon": "circle", 
@@ -867,6 +885,7 @@ for _, vuelo in df_vuelos.iterrows():
                         }
                     })
                     break
+
 capa_rutas.add_to(m)
 st.sidebar.caption(f"Vuelos sin trayectoria (<=1 pt): {vuelos_sin_ruta} / {len(df_vuelos)}")
 if tokens_faltantes:
@@ -893,6 +912,55 @@ TimestampedGeoJson(
     period="PT1M", duration="PT1M", add_last_point=False, auto_play=True,
     loop=True, max_speed=5, loop_button=True, time_slider_drag_update=True, transition_time=333,
 ).add_to(m)
+
+# Script Leaflet para dibujar ÚNICAMENTE la trayectoria de la aeronave seleccionada al hacer clic
+map_var = m.get_name()
+highlight_route_js = f"""
+<script>
+document.addEventListener("DOMContentLoaded", function() {{
+    var checkMap = setInterval(function() {{
+        var mapObj = window["{map_var}"];
+        if (mapObj) {{
+            clearInterval(checkMap);
+            var activeRouteLayer = null;
+
+            mapObj.on('popupopen', function(e) {{
+                if (activeRouteLayer) {{
+                    mapObj.removeLayer(activeRouteLayer);
+                    activeRouteLayer = null;
+                }}
+                var contentEl = e.popup.getElement();
+                if (!contentEl) return;
+                var dataDiv = contentEl.querySelector('.flight-popup-data');
+                if (dataDiv) {{
+                    try {{
+                        var coords = JSON.parse(dataDiv.getAttribute('data-coords'));
+                        if (coords && coords.length > 1) {{
+                            activeRouteLayer = L.polyline(coords, {{
+                                color: '#39FF14',
+                                weight: 3.0,
+                                opacity: 0.95,
+                                dashArray: '6, 4'
+                            }}).addTo(mapObj);
+                        }}
+                    }} catch (err) {{
+                        console.error("Error dibujando trayectoria:", err);
+                    }}
+                }}
+            }});
+
+            mapObj.on('popupclose', function(e) {{
+                if (activeRouteLayer) {{
+                    mapObj.removeLayer(activeRouteLayer);
+                    activeRouteLayer = null;
+                }}
+            }});
+        }}
+    }}, 200);
+}});
+</script>
+"""
+m.get_root().html.add_child(folium.Element(highlight_route_js))
 
 folium.LayerControl().add_to(m)
 st_folium(m, width=1400, height=750, returned_objects=[])
