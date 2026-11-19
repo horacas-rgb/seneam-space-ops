@@ -106,6 +106,14 @@ def cargar_bases_datos(mision):
         zip(df_wp['Latitud (Decimal)'], df_wp['Longitud (Decimal)']), 
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
     ).to_dict()
+
+    dicc_wp_norm = {}
+    for k, val in dicc_wp.items():
+        k_up = str(k).strip().upper()
+        dicc_wp_norm[k_up] = val
+        base_token = k_up.split()[0] if k_up.split() else ""
+        if base_token and base_token not in dicc_wp_norm:
+            dicc_wp_norm[base_token] = val
     
     # C. Hazard Areas
     df_areas = pd.read_excel(archivo_areas, sheet_name="Consolidado_Areas", header=3)
@@ -172,14 +180,29 @@ def cargar_bases_datos(mision):
                 return None
             df_timeline['hora_utc'] = df_timeline.apply(normalizar_hora, axis=1)
     
-    return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low
+    return df_wp, dicc_wp, dicc_wp_norm, df_areas, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low
 
 def decodificar_coordenada_ruta(string_punto):
-    match = re.match(r'^(\d{2})(\d{2})[Nn](\d{3})(\d{2})[Ww]$', str(string_punto).strip())
+    s = str(string_punto).strip().upper()
+    match = re.match(r'^(\d{2})(\d{2})\.?(\d*)\s*[Nn]\s*(\d{3})(\d{2})\.?(\d*)\s*[Ww]$', s)
     if match:
-        return (int(match.group(1)) + int(match.group(2)) / 60.0, 
-                -(int(match.group(3)) + int(match.group(4)) / 60.0))
+        lat_deg = int(match.group(1))
+        lat_min = float(f"{match.group(2)}.{match.group(3)}" if match.group(3) else match.group(2))
+        lon_deg = int(match.group(4))
+        lon_min = float(f"{match.group(5)}.{match.group(6)}" if match.group(6) else match.group(5))
+        return (lat_deg + lat_min / 60.0, -(lon_deg + lon_min / 60.0))
     return None
+
+def resolver_punto_vuelo(token, dicc_exacto, dicc_norm):
+    s = str(token).strip()
+    if not s or s.upper() in {"NAN", "NONE", "DCT", "SID", "STAR"}:
+        return None
+    if s in dicc_exacto:
+        return dicc_exacto[s]
+    s_up = s.upper()
+    if s_up in dicc_norm:
+        return dicc_norm[s_up]
+    return decodificar_coordenada_ruta(s_up)
 
 def agregar_capa_rutas(df_rutas, capa, color_base, prefijo_tooltip, dicc_wp):
     if df_rutas is not None and not df_rutas.empty:
@@ -322,7 +345,7 @@ if operacion == "Upcoming launches...":
     st.stop()
 
 # --- CARGA DINÁMICA DE DATOS CON CACHÉ ---
-df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low = cargar_bases_datos(operacion)
+df_waypoints, dicc_waypoints, dicc_wp_norm, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low = cargar_bases_datos(operacion)
 
 st.sidebar.title("🎛️ Map Control Panel")
 st.sidebar.markdown("### Airspace Layers")
@@ -348,7 +371,7 @@ st.sidebar.markdown("### Flight Data & Navigation")
 mostrar_rnav = st.sidebar.checkbox("RNAV Routes", value=False)
 mostrar_ats_hi = st.sidebar.checkbox("ATS Routes (HI)", value=False)
 mostrar_ats_low = st.sidebar.checkbox("ATS Routes (LOW)", value=False)
-mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=False)
+mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=True)
 mostrar_vors = st.sidebar.checkbox("Show VORs / Navaids", value=True)
 mostrar_waypoints = st.sidebar.checkbox("Show Waypoints (Fixes)", value=False)
 
@@ -742,24 +765,31 @@ capa_areas.add_to(m)
 
 # LAYER 4: RUTAS DE VUELO Y POPUP DE AERONAVES
 capa_rutas = folium.FeatureGroup(name="Static Trajectories", show=mostrar_rutas)
+vuelos_sin_ruta = 0
+tokens_faltantes = set()
+
 for _, vuelo in df_vuelos.iterrows():
     puntos_validos = []
     
     entry_pt = vuelo.get('entry_point')
     exit_pt = vuelo.get('exit_point')
-    route_str = str(vuelo.get('route', ''))
-    if pd.isnull(entry_pt) or pd.isnull(exit_pt): continue
+    route_str = "" if pd.isnull(vuelo.get('route')) else str(vuelo.get('route'))
+    candidatos = ([entry_pt] if pd.notnull(entry_pt) else []) + route_str.split() + ([exit_pt] if pd.notnull(exit_pt) else [])
     
-    for p in [entry_pt] + route_str.split() + [exit_pt]:
+    for p in candidatos:
         p_str = str(p).strip()
-        if p_str in dicc_waypoints: puntos_validos.append(dicc_waypoints[p_str])
-        else:
-            coord = decodificar_coordenada_ruta(p_str)
-            if coord: puntos_validos.append(coord)
+        coord = resolver_punto_vuelo(p_str, dicc_waypoints, dicc_wp_norm)
+        if coord:
+            puntos_validos.append(coord)
+        elif p_str.upper() not in {"NAN", "NONE", "DCT"}:
+            tokens_faltantes.add(p_str)
+
+    if len(puntos_validos) <= 1:
+        vuelos_sin_ruta += 1
             
     n_pts = len(puntos_validos)
     if n_pts > 1:
-        folium.PolyLine(locations=[[lat, lon] for lat, lon in puntos_validos], color="#39FF14", weight=0.5, opacity=0.2, dash_array="4", tooltip=f"<b>Callsign:</b> {vuelo['callsign']} | <b>Route:</b> {vuelo['adep']}-{vuelo['ades']}").add_to(capa_rutas)
+        folium.PolyLine(locations=[[lat, lon] for lat, lon in puntos_validos], color="#39FF14", weight=2.0, opacity=0.85, tooltip=f"<b>Callsign:</b> {vuelo['callsign']} | <b>Route:</b> {vuelo['adep']}-{vuelo['ades']}").add_to(capa_rutas)
         t_inicio, t_fin = vuelo['entry_hour'], vuelo['exit_hour']
         if pd.isnull(t_inicio) or pd.isnull(t_fin): continue
         duracion_vuelo_mins = int((t_fin - t_inicio).total_seconds() / 60)
@@ -819,6 +849,9 @@ for _, vuelo in df_vuelos.iterrows():
                     })
                     break
 capa_rutas.add_to(m)
+st.sidebar.caption(f"Vuelos sin trayectoria (<=1 pt): {vuelos_sin_ruta} / {len(df_vuelos)}")
+if tokens_faltantes:
+    st.sidebar.caption("Tokens sin resolver: " + ", ".join(sorted(tokens_faltantes)[:25]))
 
 # LAYER 5: LANZAMIENTO EN BOCA CHICA
 lat_boca_chica, lon_boca_chica = 25.996, -97.154
