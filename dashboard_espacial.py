@@ -18,7 +18,7 @@ AJUSTE_UTC = 6
 def cargar_bases_datos(mision):
     # Selección dinámica de bases de datos según la Misión
     if "Flight-15" in mision:
-        archivo_areas = "Coordenadas_Starship_FLT15.xlsx"
+        archivo_areas = "Coordenadas_Starship_FLT15.xlsx" if os.path.exists("Coordenadas_Starship_FLT15.xlsx") else "Coordenadas_Starship_FLT15.xls"
         archivo_vuelos = "ROCKET_13_NOV_2026.xlsx"
         fecha_mision = "2026-11-13"
     else:
@@ -114,27 +114,24 @@ def cargar_bases_datos(mision):
     
     if "Flight-15" in mision:
         try:
-            df_c2 = pd.read_excel(archivo_areas, sheet_name="AHA_C2_MMFR", header=3)
-            df_c2.columns = df_c2.columns.str.strip()
-            df_c2 = df_c2.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
-            df_c2['Área / Hazard Zone'] = 'AHA-C2'
+            hojas_reingreso = [
+                ("AHA_C1_US", "AHA-C1"),
+                ("AHA_C2_MMFR", "AHA-C2"),
+                ("AHA_C3_MMFR", "AHA-C3"),
+                ("AHA_C4_US", "AHA-C4"),
+                ("AHA_C5_MMFO", "AHA-C5"),
+                ("AHA_C6_US", "AHA-C6"),
+            ]
+            dfs_reingreso = []
+            for hoja_nombre, zona_etiqueta in hojas_reingreso:
+                df_h = pd.read_excel(archivo_areas, sheet_name=hoja_nombre, header=3)
+                df_h.columns = df_h.columns.str.strip()
+                df_h = df_h.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
+                df_h['Área / Hazard Zone'] = zona_etiqueta
+                df_h = df_h.drop_duplicates(subset=['Área / Hazard Zone', 'Latitud (Decimal)', 'Longitud (Decimal)'])
+                dfs_reingreso.append(df_h)
             
-            # Deduplicar y normalizar zona para evitar etiquetas o polígonos duplicados de AHA-C3
-            df_c3 = pd.read_excel(archivo_areas, sheet_name="AHA_C3_MMFR", header=3)
-            df_c3.columns = df_c3.columns.str.strip()
-            df_c3 = df_c3.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
-            if 'Área / Hazard Zone' in df_c3.columns:
-                df_c3 = df_c3.drop_duplicates(subset=['Área / Hazard Zone', 'Latitud (Decimal)', 'Longitud (Decimal)'])
-            else:
-                df_c3 = df_c3.drop_duplicates(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
-            df_c3['Área / Hazard Zone'] = 'AHA-C3'
-
-            df_c4 = pd.read_excel(archivo_areas, sheet_name="AHA_C4_US", header=3)
-            df_c4.columns = df_c4.columns.str.strip()
-            df_c4 = df_c4.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
-            df_c4['Área / Hazard Zone'] = 'AHA-C4'
-            
-            df_areas = pd.concat([df_areas, df_c2, df_c3, df_c4], ignore_index=True)
+            df_areas = pd.concat([df_areas] + dfs_reingreso, ignore_index=True)
             df_areas = df_areas.drop_duplicates(subset=['Área / Hazard Zone', 'Latitud (Decimal)', 'Longitud (Decimal)'])
         except Exception as e:
             print("Error cargando áreas de reingreso:", e)
@@ -344,7 +341,7 @@ mostrar_dra = st.sidebar.checkbox("DRA-1 Area", value=True)
 mostrar_aha = st.sidebar.checkbox("Launch Hazard Areas (AHA-A3 & AHA-B1)", value=True)
 
 if "Flight-15" in operacion:
-    mostrar_aha_reentry = st.sidebar.checkbox("Reentry Hazard Areas (AHA-C2, AHA-C3 & AHA-C4)", value=True)
+    mostrar_aha_reentry = st.sidebar.checkbox("Reentry Hazard Areas (AHA-C1 to AHA-C6)", value=True)
 else:
     mostrar_aha_reentry = False
 
@@ -666,13 +663,17 @@ capa_navaids.add_to(m)
 # --- VENTANAS DE TIEMPO DINÁMICAS (Lanzamiento y Reingreso) ---
 if "Flight-15" in operacion:
     rango_launch = list(pd.date_range(start=pd.to_datetime("2026-11-13 20:45:00"), end=pd.to_datetime("2026-11-14 00:40:00"), freq='1min'))
-    rango_reentry = list(pd.date_range(start=pd.to_datetime("2026-11-14 20:56:00"), end=pd.to_datetime("2026-11-15 00:14:00"), freq='1min'))
+    rango_reentry_c1_c3_c5_c6 = list(pd.date_range(start=pd.to_datetime("2026-11-14 20:56:00"), end=pd.to_datetime("2026-11-14 21:21:00"), freq='1min'))
+    rango_reentry_c4 = list(pd.date_range(start=pd.to_datetime("2026-11-14 21:08:00"), end=pd.to_datetime("2026-11-14 21:21:00"), freq='1min'))
+    rango_reentry = rango_reentry_c1_c3_c5_c6
     t_liftoff = pd.to_datetime("2026-11-13 22:45:00")
     t_end_liftoff = pd.to_datetime("2026-11-13 23:00:00")
     rango_liftoff = list(pd.date_range(start=t_liftoff, end=t_end_liftoff, freq='1min'))
     banner_text = "🚀 STARSHIP FLIGHT-15 LIFT OFF"
 else:
     rango_launch = list(pd.date_range(start=pd.to_datetime("2026-09-28 12:15:00"), end=pd.to_datetime("2026-09-28 12:58:00"), freq='1min'))
+    rango_reentry_c1_c3_c5_c6 = []
+    rango_reentry_c4 = []
     rango_reentry = []
     t_liftoff = pd.to_datetime("2026-09-28 12:49:00")
     t_end_liftoff = pd.to_datetime("2026-09-28 12:58:00")
@@ -694,15 +695,26 @@ etiquetas_dibujadas = set()
 for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_capas):
     area_str = str(area).upper()
     
-    if "C2" in area_str or "C3" in area_str or "C4" in area_str:
+    if any(z in area_str for z in ["C1", "C2", "C3", "C4", "C5", "C6"]):
         if not mostrar_aha_reentry: continue
-        if "C2" in area_str:
+        if "C1" in area_str:
+            color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C1"
+            tiempos_activos = rango_reentry_c1_c3_c5_c6
+        elif "C2" in area_str:
             color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C2"
+            tiempos_activos = rango_reentry_c1_c3_c5_c6
         elif "C3" in area_str:
             color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C3"
+            tiempos_activos = rango_reentry_c1_c3_c5_c6
+        elif "C4" in area_str:
+            color, opacity_fill, label_name = "#E040FB", 0.45, "AHA-C4"
+            tiempos_activos = rango_reentry_c4
+        elif "C5" in area_str:
+            color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C5"
+            tiempos_activos = rango_reentry_c1_c3_c5_c6
         else:
-            color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C4"
-        tiempos_activos = rango_reentry
+            color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C6"
+            tiempos_activos = rango_reentry_c1_c3_c5_c6
     elif "TFR" in area_str:
         if not mostrar_tfr: continue
         color, opacity_fill, label_name = "#90EE90", 0.35, "TFR"
