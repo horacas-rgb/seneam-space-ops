@@ -6,7 +6,6 @@ from folium.plugins import TimestampedGeoJson
 import pandas as pd
 import re
 import os
-import json
 import base64
 from datetime import timedelta
 import requests
@@ -16,7 +15,7 @@ st.set_page_config(page_title="Space Operations - SENEAM", layout="wide")
 AJUSTE_UTC = 6 
 
 @st.cache_data(show_spinner=False)
-def cargar_bases_datos(mision, cache_buster=0):
+def cargar_bases_datos(mision):
     # Selección dinámica de bases de datos según la Misión
     if "Flight-15" in mision:
         archivo_areas = "Coordenadas_Starship_FLT15.xlsx"
@@ -107,69 +106,6 @@ def cargar_bases_datos(mision, cache_buster=0):
         zip(df_wp['Latitud (Decimal)'], df_wp['Longitud (Decimal)']), 
         index=df_wp['Nombre del Punto / Waypoint'].astype(str).str.strip()
     ).to_dict()
-
-    dicc_wp_norm = {}
-    for k, val in dicc_wp.items():
-        k_up = str(k).strip().upper()
-        dicc_wp_norm[k_up] = val
-        
-        # Extraer designador oficial de 3 letras entre paréntesis (ej. "VOR CANCUN (CUN)" -> "CUN")
-        match_vor = re.search(r'\(([A-Z]{3})\)', k_up)
-        if match_vor:
-            cod_vor = match_vor.group(1)
-            if cod_vor not in dicc_wp_norm:
-                dicc_wp_norm[cod_vor] = val
-        else:
-            base_token = k_up.split()[0] if k_up.split() else ""
-            if base_token and base_token not in {"VOR", "NDB", "DME", "TACAN", "VORTAC", "ILS"} and base_token not in dicc_wp_norm:
-                dicc_wp_norm[base_token] = val
-
-    # Enriquecer dicc_wp_norm con puntos presentes en tablas RNAV y ATS
-    for df_ruta_aux in [df_rnav, df_ats_hi, df_ats_low]:
-        if df_ruta_aux is not None and not df_ruta_aux.empty:
-            cols_aux = [c.strip() for c in df_ruta_aux.columns]
-            lat_col = next((c for c in cols_aux if 'lat' in c.lower()), None)
-            lon_col = next((c for c in cols_aux if 'lon' in c.lower() or 'lng' in c.lower()), None)
-            pt_col = next((c for c in cols_aux if any(w in c.lower() for w in ['waypoint', 'punto', 'fix', 'designator', 'ident'])), None)
-            if lat_col and lon_col and pt_col:
-                for _, r_aux in df_ruta_aux.iterrows():
-                    pt_name = str(r_aux.get(pt_col, '')).strip().upper()
-                    lat_v, lon_v = r_aux.get(lat_col), r_aux.get(lon_col)
-                    if pt_name and pt_name not in dicc_wp_norm and pd.notnull(lat_v) and pd.notnull(lon_v):
-                        try:
-                            dicc_wp_norm[pt_name] = (float(lat_v), float(lon_v))
-                        except ValueError:
-                            pass
-
-    # Vincular indicadores ICAO de aeródromos mexicanos a su VOR de referencia
-    AERODROMOS_VOR_REF = {
-        'MMUN': 'CUN', 'MMMD': 'MID', 'MMMX': 'MEX', 'MMSM': 'SLM', 'MMTL': 'PBC',
-        'MMVA': 'VSA', 'MMCE': 'CME', 'MMCM': 'CTM', 'MMTG': 'TGZ', 'MMIT': 'IZT',
-        'MMTP': 'TAP', 'MMCZ': 'CZM', 'MMVR': 'VER', 'MMOX': 'OAX', 'MMPB': 'PBC',
-        'MMQT': 'QET', 'MMGL': 'GDL', 'MMMY': 'MTY', 'MMTM': 'TAM', 'MMTO': 'TLC',
-        'MMAA': 'ACA', 'MMBT': 'HUX', 'MMPR': 'PVR', 'MMSD': 'SJD', 'MMHO': 'HMO',
-        'MMCU': 'CUU', 'MMCS': 'CJS', 'MMTJ': 'TIJ', 'MMMZ': 'MZT', 'MMLO': 'BJX',
-        'MMCP': 'CPE', 'MMPQ': 'VSA', 'MMAN': 'MTY', 'MMSP': 'SLP', 'MMTC': 'TRC',
-        'MMMM': 'MLM'
-    }
-    for icao_ad, vor_ref in AERODROMOS_VOR_REF.items():
-        if vor_ref in dicc_wp_norm and icao_ad not in dicc_wp_norm:
-            dicc_wp_norm[icao_ad] = dicc_wp_norm[vor_ref]
-
-    # Puntos limítrofes FIR México / Caribe / Centroamérica ausentes en ENR 3.3
-    PUNTOS_LIMITROFES_FIR = {
-        'NUDAL': (21.583333, -86.000000),
-        'NOSAT': (21.733333, -86.000000),
-        'OMATO': (17.163056, -93.923056),
-        'VIDNO': (15.650000, -90.050000),
-        'NUKAN': (19.650000, -86.000000),
-        'MAXIM': (21.250000, -85.150000),
-        'CIGAR': (23.833333, -84.500000),
-        'CANOA': (23.083333, -84.916667),
-    }
-    for pt_lim, coords_lim in PUNTOS_LIMITROFES_FIR.items():
-        if pt_lim not in dicc_wp_norm:
-            dicc_wp_norm[pt_lim] = coords_lim
     
     # C. Hazard Areas
     df_areas = pd.read_excel(archivo_areas, sheet_name="Consolidado_Areas", header=3)
@@ -183,9 +119,14 @@ def cargar_bases_datos(mision, cache_buster=0):
             df_c2 = df_c2.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
             df_c2['Área / Hazard Zone'] = 'AHA-C2'
             
+            # Deduplicar y normalizar zona para evitar etiquetas o polígonos duplicados de AHA-C3
             df_c3 = pd.read_excel(archivo_areas, sheet_name="AHA_C3_MMFR", header=3)
             df_c3.columns = df_c3.columns.str.strip()
             df_c3 = df_c3.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
+            if 'Área / Hazard Zone' in df_c3.columns:
+                df_c3 = df_c3.drop_duplicates(subset=['Área / Hazard Zone', 'Latitud (Decimal)', 'Longitud (Decimal)'])
+            else:
+                df_c3 = df_c3.drop_duplicates(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
             df_c3['Área / Hazard Zone'] = 'AHA-C3'
 
             df_c4 = pd.read_excel(archivo_areas, sheet_name="AHA_C4_US", header=3)
@@ -194,6 +135,7 @@ def cargar_bases_datos(mision, cache_buster=0):
             df_c4['Área / Hazard Zone'] = 'AHA-C4'
             
             df_areas = pd.concat([df_areas, df_c2, df_c3, df_c4], ignore_index=True)
+            df_areas = df_areas.drop_duplicates(subset=['Área / Hazard Zone', 'Latitud (Decimal)', 'Longitud (Decimal)'])
         except Exception as e:
             print("Error cargando áreas de reingreso:", e)
     
@@ -207,149 +149,43 @@ def cargar_bases_datos(mision, cache_buster=0):
             dict_espacio[sheet] = df_sector.dropna(subset=['Latitud (Decimal)', 'Longitud (Decimal)'])
         
     # E. Vuelos y Línea de Tiempo
-    error_vuelos = None
-    df_vuelos = pd.DataFrame()
-    df_timeline = None
-
-    try:
-        xls_vuelos = pd.ExcelFile(archivo_vuelos)
-        hoja_vuelos = "ROCKET_13_NOV_2026" if "ROCKET_13_NOV_2026" in xls_vuelos.sheet_names else xls_vuelos.sheet_names[0]
-        df_vuelos = pd.read_excel(xls_vuelos, sheet_name=hoja_vuelos)
-        df_vuelos.columns = df_vuelos.columns.str.strip()
-        df_vuelos = df_vuelos.dropna(how="all")
-        
-        if 'entry_hour' in df_vuelos.columns:
-            df_vuelos['entry_hour'] = pd.to_datetime(df_vuelos['entry_hour'], errors='coerce')
-        if 'exit_hour' in df_vuelos.columns:
-            df_vuelos['exit_hour'] = pd.to_datetime(df_vuelos['exit_hour'], errors='coerce')
-        
-        if "Timeline" in xls_vuelos.sheet_names:
-            df_timeline = pd.read_excel(xls_vuelos, sheet_name="Timeline")
-            df_timeline.columns = df_timeline.columns.str.strip().str.lower().str.replace(' ', '_')
-            if 'hora_utc' in df_timeline.columns:
-                def normalizar_hora(row):
-                    val = row['hora_utc']
-                    if pd.isnull(val): return None
-                    evento_str = str(row.get('evento', ''))
-                    
-                    fecha = fecha_mision
-                    if "Flight-15" in mision:
-                        if "Nov 14" in evento_str or "Nov 14" in str(val): fecha = "2026-11-14"
-                        elif "Nov 13" in evento_str or "Nov 13" in str(val): fecha = "2026-11-13"
-                    
-                    match = re.search(r'(\d{1,2}:\d{2}(?::\d{2})?)', str(val))
-                    if match: return pd.to_datetime(f"{fecha} {match.group(1)}")
-                    return None
-                df_timeline['hora_utc'] = df_timeline.apply(normalizar_hora, axis=1)
-    except Exception as e:
-        error_vuelos = f"{type(e).__name__}: {e}"
+    xls_vuelos = pd.ExcelFile(archivo_vuelos)
+    df_vuelos = pd.read_excel(xls_vuelos, sheet_name=xls_vuelos.sheet_names[0])
+    df_vuelos.columns = df_vuelos.columns.str.strip()
     
-    return df_wp, dicc_wp, dicc_wp_norm, df_areas, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low, error_vuelos
+    if 'entry_hour' in df_vuelos.columns:
+        df_vuelos['entry_hour'] = pd.to_datetime(df_vuelos['entry_hour'], errors='coerce')
+    if 'exit_hour' in df_vuelos.columns:
+        df_vuelos['exit_hour'] = pd.to_datetime(df_vuelos['exit_hour'], errors='coerce')
+    
+    df_timeline = None
+    if "Timeline" in xls_vuelos.sheet_names:
+        df_timeline = pd.read_excel(xls_vuelos, sheet_name="Timeline")
+        df_timeline.columns = df_timeline.columns.str.strip().str.lower().str.replace(' ', '_')
+        if 'hora_utc' in df_timeline.columns:
+            def normalizar_hora(row):
+                val = row['hora_utc']
+                if pd.isnull(val): return None
+                evento_str = str(row.get('evento', ''))
+                
+                fecha = fecha_mision
+                if "Flight-15" in mision:
+                    if "Nov 14" in evento_str or "Nov 14" in str(val): fecha = "2026-11-14"
+                    elif "Nov 13" in evento_str or "Nov 13" in str(val): fecha = "2026-11-13"
+                
+                match = re.search(r'(\d{1,2}:\d{2}(?::\d{2})?)', str(val))
+                if match: return pd.to_datetime(f"{fecha} {match.group(1)}")
+                return None
+            df_timeline['hora_utc'] = df_timeline.apply(normalizar_hora, axis=1)
+    
+    return df_wp, dicc_wp, df_areas, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low
 
 def decodificar_coordenada_ruta(string_punto):
-    # Elimina sufijos ICAO de velocidad/nivel como /M084F380 o /N0484F370
-    s = str(string_punto).strip().upper().split('/')[0].strip()
-    
-    # Formato 1: Grados y minutos (ej. 3730N04000W, 2530.5N09710.2W)
-    m1 = re.match(r'^(\d{2})(\d{2})\.?(\d*)\s*([NS])\s*(\d{3})(\d{2})\.?(\d*)\s*([EW])$', s)
-    if m1:
-        lat = int(m1.group(1)) + float(f"{m1.group(2)}.{m1.group(3)}" if m1.group(3) else m1.group(2)) / 60.0
-        if m1.group(4) == 'S': lat = -lat
-        lon = int(m1.group(5)) + float(f"{m1.group(6)}.{m1.group(7)}" if m1.group(7) else m1.group(6)) / 60.0
-        if m1.group(8) == 'W': lon = -lon
-        return (lat, lon)
-
-    # Formato 2: Grados enteros oceánicos (ej. 27N050W, 31N040W, 36N060W)
-    m2 = re.match(r'^(\d{2})\s*([NS])\s*(\d{3})\s*([EW])$', s)
-    if m2:
-        lat = float(m2.group(1)) * (-1 if m2.group(2) == 'S' else 1)
-        lon = float(m2.group(3)) * (-1 if m2.group(4) == 'W' else 1)
-        return (lat, lon)
-
+    match = re.match(r'^(\d{2})(\d{2})[Nn](\d{3})(\d{2})[Ww]$', str(string_punto).strip())
+    if match:
+        return (int(match.group(1)) + int(match.group(2)) / 60.0, 
+                -(int(match.group(3)) + int(match.group(4)) / 60.0))
     return None
-
-def es_aerovia_o_procedimiento(token_upper):
-    # Aerovías ATS / RNAV comunes (ej. A509, A552, A699, A766, A770, J12, Q100, T290, V1, UL..., UJ..., UT..., UM..., UW...)
-    if re.match(r'^(UL|UJ|UT|UM|UW|A|B|G|R|J|Q|T|V|M|N|L|K|H|W|Z)\d{1,4}[A-Z]?$', token_upper):
-        return True
-    # Procedimientos SID/STAR típicos (ej. ABAN4C)
-    if re.match(r'^[A-Z]{3,5}\d[A-Z]$', token_upper):
-        return True
-    return False
-
-def resolver_punto_vuelo(token, dicc_exacto, dicc_norm):
-    s = str(token).strip()
-    if not s:
-        return None
-    # Limpiar posible sufijo ICAO de velocidad/nivel (ej. ADARA/N0488F370 -> ADARA)
-    s_base = s.split('/')[0].strip()
-    s_up = s_base.upper()
-    if not s_up or s_up in {"NAN", "NONE", "DCT", "SID", "STAR"}:
-        return None
-    if es_aerovia_o_procedimiento(s_up):
-        return None
-    if s_base in dicc_exacto:
-        return dicc_exacto[s_base]
-    if s_up in dicc_norm:
-        return dicc_norm[s_up]
-    return decodificar_coordenada_ruta(s_up)
-
-def obtener_ventana_area_desde_timeline(df_timeline, categoria_area, fallback_tiempos, fallback_inicio, fallback_fin):
-    """
-    Calcula los timestamps activos (frecuencia 1min) para un área de riesgo a partir de df_timeline.
-    Respeta estrictamente las horas de activación y liberación/desactivación para evitar
-    que aparezcan aeronaves dentro de AHAs ya liberadas.
-    """
-    if df_timeline is None or df_timeline.empty or 'hora_utc' not in df_timeline.columns or 'evento' not in df_timeline.columns:
-        return fallback_tiempos
-
-    eventos_validos = df_timeline[pd.notnull(df_timeline['hora_utc'])].sort_values('hora_utc')
-    if eventos_validos.empty:
-        return fallback_tiempos
-
-    def coincide_categoria(texto_ev):
-        t = texto_ev.upper()
-        if categoria_area == "AHA-A3":
-            return "A3" in t
-        if categoria_area == "AHA-B1":
-            return "B1" in t
-        if categoria_area == "AHA-REENTRY":
-            return any(k in t for k in ["C2", "C3", "C4", "REENTRY", "RE-ENTRY"])
-        if categoria_area == "DRA":
-            return "DRA" in t
-        if categoria_area == "TFR":
-            return "TFR" in t
-        if categoria_area == "10^-7":
-            return "10^-7" in t or "10_7" in t or "10-7" in t
-        return False
-
-    inicio_dt = None
-    fin_dt = None
-
-    for _, fila in eventos_validos.iterrows():
-        ev_txt = str(fila['evento']).upper()
-        ts = pd.to_datetime(fila['hora_utc'])
-        if not coincide_categoria(ev_txt):
-            continue
-
-        es_cierre = any(w in ev_txt for w in ["RELEASE", "RELEASED", "LIBERAD", "INACTIVE", "DEACTIVAT", "DESACTIV", "END", "CLOSE", "CLOSED"])
-        es_apertura = any(w in ev_txt for w in ["ACTIVE", "ACTIVAT", "ACTIVAD", "OPEN", "START", "LIFTOFF", "T-0"])
-
-        if es_cierre and (inicio_dt is None or ts >= inicio_dt):
-            fin_dt = ts
-        elif es_apertura and inicio_dt is None:
-            inicio_dt = ts
-
-    if inicio_dt is None and fin_dt is not None and fallback_inicio is not None:
-        inicio_dt = pd.to_datetime(fallback_inicio)
-
-    if inicio_dt is not None and fin_dt is None and fallback_fin is not None:
-        fin_dt = pd.to_datetime(fallback_fin)
-
-    if inicio_dt is not None and fin_dt is not None and fin_dt >= inicio_dt:
-        return list(pd.date_range(start=inicio_dt, end=fin_dt, freq='1min'))
-
-    return fallback_tiempos
 
 def agregar_capa_rutas(df_rutas, capa, color_base, prefijo_tooltip, dicc_wp):
     if df_rutas is not None and not df_rutas.empty:
@@ -491,21 +327,10 @@ if operacion == "Upcoming launches...":
     st.markdown("""<div style="text-align: center; padding: 40px; background-color: #111827; border-radius: 15px; border: 1px solid #374151;"><h1 style="color: #39FF14; font-size: 2.8rem; margin-bottom: 20px;">🚀 SpaceX Starship Super Heavy Flight-16</h1><h2 style="color: #FFFFFF; font-size: 2rem; font-weight: 400; margin-bottom: 30px;">Upcoming Launch: TBD</h2><p style="color: #9CA3AF; font-size: 1.1rem; margin-bottom: 40px;">Strategic coordination and air traffic flow management (ATFM) for upcoming orbital flight tests.</p><a href="https://www.spacex.com/content/starship-flight-tests" target="_blank" style="background-color: #2563EB; color: white; padding: 15px 30px; border-radius: 8px; text-decoration: none; font-size: 1.2rem; font-weight: bold;">View Official SpaceX Flight Test Portal ↗</a></div>""", unsafe_allow_html=True)
     st.stop()
 
-if "cache_buster" not in st.session_state:
-    st.session_state.cache_buster = 0
-
 # --- CARGA DINÁMICA DE DATOS CON CACHÉ ---
-df_waypoints, dicc_waypoints, dicc_wp_norm, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low, error_vuelos = cargar_bases_datos(operacion, st.session_state.cache_buster)
+df_waypoints, dicc_waypoints, df_riesgo, dict_espacio, df_vuelos, df_timeline, df_rnav, df_ats_hi, df_ats_low = cargar_bases_datos(operacion)
 
 st.sidebar.title("🎛️ Map Control Panel")
-if st.sidebar.button("🔄 Limpiar caché y recargar datos"):
-    st.cache_data.clear()
-    st.session_state.cache_buster += 1
-    st.rerun()
-
-if error_vuelos:
-    st.sidebar.error(f"Error leyendo vuelos: {error_vuelos}")
-
 st.sidebar.markdown("### Airspace Layers")
 mostrar_firs = st.sidebar.checkbox("Mexico FIR, Mazatlan Oceanic FIR", value=True)
 mostrar_acc_mid = st.sidebar.checkbox("Merida Control Center (MMID ACC)", value=False)
@@ -529,7 +354,7 @@ st.sidebar.markdown("### Flight Data & Navigation")
 mostrar_rnav = st.sidebar.checkbox("RNAV Routes", value=False)
 mostrar_ats_hi = st.sidebar.checkbox("ATS Routes (HI)", value=False)
 mostrar_ats_low = st.sidebar.checkbox("ATS Routes (LOW)", value=False)
-mostrar_rutas_todas = st.sidebar.checkbox("Show All Trajectories (Background)", value=False)
+mostrar_rutas = st.sidebar.checkbox("Historical Flight Trajectories", value=False)
 mostrar_vors = st.sidebar.checkbox("Show VORs / Navaids", value=True)
 mostrar_waypoints = st.sidebar.checkbox("Show Waypoints (Fixes)", value=False)
 
@@ -854,7 +679,7 @@ else:
     rango_liftoff = list(pd.date_range(start=t_liftoff, end=t_end_liftoff, freq='1min'))
     banner_text = "🚀 STARSHIP FLIGHT-14 LIFT OFF"
 
-# LAYER 3: Hazard Areas Animadas según Critical Timeline Events (UTC)
+# LAYER 3: Hazard Areas Animadas
 features_geojson = []
 
 def orden_capas(x):
@@ -865,6 +690,7 @@ def orden_capas(x):
     return 4
 
 capa_areas = folium.FeatureGroup(name="Space Hazard Areas")
+etiquetas_dibujadas = set()
 for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_capas):
     area_str = str(area).upper()
     
@@ -876,37 +702,23 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
             color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C3"
         else:
             color, opacity_fill, label_name = "#D500F9", 0.45, "AHA-C4"
-        fb_ini = rango_reentry[0] if rango_reentry else None
-        fb_fin = rango_reentry[-1] if rango_reentry else None
-        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, "AHA-REENTRY", rango_reentry, fb_ini, fb_fin)
+        tiempos_activos = rango_reentry
     elif "TFR" in area_str:
         if not mostrar_tfr: continue
         color, opacity_fill, label_name = "#90EE90", 0.35, "TFR"
-        rango_tfr_fb = rango_launch + rango_reentry
-        fb_ini = rango_tfr_fb[0] if rango_tfr_fb else None
-        fb_fin = rango_tfr_fb[-1] if rango_tfr_fb else None
-        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, "TFR", rango_tfr_fb, fb_ini, fb_fin)
+        tiempos_activos = rango_launch + rango_reentry
     elif "DRA" in area_str:
         if not mostrar_dra: continue
         color, opacity_fill, label_name = "#FFB347", 0.35, "DRA-1"
-        fb_ini = rango_launch[0] if rango_launch else None
-        fb_fin = rango_launch[-1] if rango_launch else None
-        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, "DRA", rango_launch, fb_ini, fb_fin)
+        tiempos_activos = rango_launch
     elif "AHA" in area_str:
         if not mostrar_aha: continue
-        if "A3" in area_str:
-            color, opacity_fill, label_name, cat_aha = "#FF7F7F", 0.55, "AHA-A3", "AHA-A3"
-        else:
-            color, opacity_fill, label_name, cat_aha = "#FF7F7F", 0.55, "AHA-B1", "AHA-B1"
-        fb_ini = rango_launch[0] if rango_launch else None
-        fb_fin = rango_launch[-1] if rango_launch else None
-        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, cat_aha, rango_launch, fb_ini, fb_fin)
+        color, opacity_fill, label_name = "#FF7F7F", 0.55, "AHA-A3" if "A3" in area_str else "AHA-B1"
+        tiempos_activos = rango_launch
     elif "10^-7" in area_str or "10_7" in area_str:
         if not mostrar_10_7: continue
         color, opacity_fill, label_name = "#FFFFE0", 0.15, "10^-7"
-        fb_ini = rango_launch[0] if rango_launch else None
-        fb_fin = rango_launch[-1] if rango_launch else None
-        tiempos_activos = obtener_ventana_area_desde_timeline(df_timeline, "10^-7", rango_launch, fb_ini, fb_fin)
+        tiempos_activos = rango_launch
     else:
         color, opacity_fill, label_name = "#FFA500", 0.35, area
         tiempos_activos = rango_launch
@@ -920,10 +732,12 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
     if "10^-7" in label_name:
         cent_lat -= 0.6  
         
-    folium.map.Marker(
-        [cent_lat, cent_lon], 
-        icon=folium.DivIcon(icon_size=(100,20), icon_anchor=(50,10), html=f'<div style="font-size: 10pt; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; text-align: center;">{label_name}</div>')
-    ).add_to(capa_areas)
+    if label_name not in etiquetas_dibujadas:
+        etiquetas_dibujadas.add(label_name)
+        folium.map.Marker(
+            [cent_lat, cent_lon], 
+            icon=folium.DivIcon(icon_size=(100,20), icon_anchor=(50,10), html=f'<div style="font-size: 10pt; color: white; font-weight: bold; text-shadow: 1px 1px 2px black; text-align: center;">{label_name}</div>')
+        ).add_to(capa_areas)
     
     coords_lon_lat = [[lon, lat] for lat, lon in zip(datos['Latitud (Decimal)'], datos['Longitud (Decimal)'])]
     if coords_lon_lat[0] != coords_lon_lat[-1]: coords_lon_lat.append(coords_lon_lat[0])
@@ -935,46 +749,26 @@ for area, datos in sorted(df_riesgo.groupby('Área / Hazard Zone'), key=orden_ca
         })
 capa_areas.add_to(m)
 
-# LAYER 4: AERONAVES INTERACTIVAS Y TRAYECTORIAS BAJO DEMANDA
-capa_rutas = folium.FeatureGroup(name="Static Trajectories (Background)", show=mostrar_rutas_todas)
-vuelos_sin_ruta = 0
-tokens_faltantes = set()
-
-for idx_vuelo, vuelo in df_vuelos.iterrows():
+# LAYER 4: RUTAS DE VUELO Y POPUP DE AERONAVES
+capa_rutas = folium.FeatureGroup(name="Static Trajectories", show=mostrar_rutas)
+for _, vuelo in df_vuelos.iterrows():
     puntos_validos = []
     
     entry_pt = vuelo.get('entry_point')
     exit_pt = vuelo.get('exit_point')
-    route_str = "" if pd.isnull(vuelo.get('route')) else str(vuelo.get('route'))
-    candidatos = ([entry_pt] if pd.notnull(entry_pt) else []) + route_str.split() + ([exit_pt] if pd.notnull(exit_pt) else [])
+    route_str = str(vuelo.get('route', ''))
+    if pd.isnull(entry_pt) or pd.isnull(exit_pt): continue
     
-    for p in candidatos:
+    for p in [entry_pt] + route_str.split() + [exit_pt]:
         p_str = str(p).strip()
-        p_base_up = p_str.split('/')[0].strip().upper()
-        coord = resolver_punto_vuelo(p_str, dicc_waypoints, dicc_wp_norm)
-        if coord:
-            puntos_validos.append(coord)
-        elif p_base_up and p_base_up not in {"NAN", "NONE", "DCT", "SID", "STAR"} and not es_aerovia_o_procedimiento(p_base_up):
-            tokens_faltantes.add(p_str)
-
-    if len(puntos_validos) <= 1:
-        vuelos_sin_ruta += 1
+        if p_str in dicc_waypoints: puntos_validos.append(dicc_waypoints[p_str])
+        else:
+            coord = decodificar_coordenada_ruta(p_str)
+            if coord: puntos_validos.append(coord)
             
     n_pts = len(puntos_validos)
     if n_pts > 1:
-        callsign = str(vuelo.get('callsign', 'N/A'))
-        tipo_aeronave = str(vuelo.get('aircraft_type', 'N/A'))
-        adep = str(vuelo.get('adep', 'N/A'))
-        ades = str(vuelo.get('ades', 'N/A'))
-
-        folium.PolyLine(
-            locations=[[lat, lon] for lat, lon in puntos_validos],
-            color="#39FF14",
-            weight=1.5,
-            opacity=0.65,
-            tooltip=f"<b>Callsign:</b> {callsign} | <b>ADEP-ADES:</b> {adep}-{ades}"
-        ).add_to(capa_rutas)
-
+        folium.PolyLine(locations=[[lat, lon] for lat, lon in puntos_validos], color="#39FF14", weight=0.5, opacity=0.2, dash_array="4", tooltip=f"<b>Callsign:</b> {vuelo['callsign']} | <b>Route:</b> {vuelo['adep']}-{vuelo['ades']}").add_to(capa_rutas)
         t_inicio, t_fin = vuelo['entry_hour'], vuelo['exit_hour']
         if pd.isnull(t_inicio) or pd.isnull(t_fin): continue
         duracion_vuelo_mins = int((t_fin - t_inicio).total_seconds() / 60)
@@ -983,17 +777,29 @@ for idx_vuelo, vuelo in df_vuelos.iterrows():
         paso_tiempo = (t_fin - t_inicio) / (n_pts - 1)
         tiempos_nodos = [t_inicio + paso_tiempo * i for i in range(n_pts)]
         
-        coords_json = json.dumps([[round(lat, 5), round(lon, 5)] for lat, lon in puntos_validos])
+        callsign = vuelo.get('callsign', 'N/A')
+        tipo_aeronave = vuelo.get('aircraft_type', 'N/A')
+        adep = vuelo.get('adep', 'N/A')
+        ades = vuelo.get('ades', 'N/A')
+        nivel_vuelo = vuelo.get('entry_level', vuelo.get('rfl', 'N/A'))
+        if pd.notna(nivel_vuelo):
+            nivel_str = f"FL{int(float(nivel_vuelo))}" if str(nivel_vuelo).replace('.','',1).isdigit() else str(nivel_vuelo)
+        else:
+            nivel_str = "N/A"
+        ruta_completa = vuelo.get('route', 'Directo / No especificada')
 
         popup_html = f"""
-        <div class="flight-popup-data" data-coords='{coords_json}' style="font-family: Arial, sans-serif; font-size: 12px; min-width: 190px; color: #111827;">
-            <div style="background-color: #111827; color: #39FF14; padding: 6px 8px; font-weight: bold; border-radius: 4px 4px 0 0; font-size: 13px;">
+        <div style="font-family: Arial, sans-serif; font-size: 11px; width: 220px; color: #333;">
+            <div style="background-color: #00FFFF; padding: 5px; text-align: center; font-weight: bold; color: #0c2340; border-radius: 3px 3px 0 0;">
                 ✈️ {callsign}
             </div>
-            <div style="padding: 6px 8px; background-color: #F9FAFB; border: 1px solid #D1D5DB; border-top: none; border-radius: 0 0 4px 4px; line-height: 1.5;">
-                <div><b>Callsign:</b> {callsign}</div>
-                <div><b>ADEP-ADES:</b> {adep}-{ades}</div>
-                <div><b>Aircraft Type:</b> {tipo_aeronave}</div>
+            <table style="width: 100%; border-collapse: collapse; margin-top: 5px;">
+                <tr><td><b>Tipo Aeronave:</b></td><td>{tipo_aeronave}</td></tr>
+                <tr><td><b>ADEP - ADES:</b></td><td>{adep} - {ades}</td></tr>
+                <tr><td><b>Nivel de Vuelo:</b></td><td>{nivel_str}</td></tr>
+            </table>
+            <div style="margin-top: 6px; padding-top: 4px; border-top: 1px solid #ccc; font-size: 10px; word-wrap: break-word;">
+                <b>Ruta:</b> <span style="color: #05508a;">{ruta_completa}</span>
             </div>
         </div>
         """
@@ -1012,8 +818,7 @@ for idx_vuelo, vuelo in df_vuelos.iterrows():
                         lon_curr, lat_curr = lonA + (lonB - lonA) * fraction, latA + (latB - latA) * fraction
                         
                     features_geojson.append({
-                        "type": "Feature",
-                        "geometry": {"type": "Point", "coordinates": [lon_curr, lat_curr]},
+                        "type": "Feature", "geometry": {"type": "Point", "coordinates": [lon_curr, lat_curr]},
                         "properties": {
                             "times": [int((t_current + timedelta(hours=AJUSTE_UTC)).timestamp() * 1000)], 
                             "icon": "circle", 
@@ -1022,11 +827,7 @@ for idx_vuelo, vuelo in df_vuelos.iterrows():
                         }
                     })
                     break
-
 capa_rutas.add_to(m)
-st.sidebar.caption(f"Vuelos sin trayectoria (<=1 pt): {vuelos_sin_ruta} / {len(df_vuelos)}")
-if tokens_faltantes:
-    st.sidebar.caption("Tokens sin resolver: " + ", ".join(sorted(tokens_faltantes)[:25]))
 
 # LAYER 5: LANZAMIENTO EN BOCA CHICA
 lat_boca_chica, lon_boca_chica = 25.996, -97.154
@@ -1049,55 +850,6 @@ TimestampedGeoJson(
     period="PT1M", duration="PT1M", add_last_point=False, auto_play=True,
     loop=True, max_speed=5, loop_button=True, time_slider_drag_update=True, transition_time=333,
 ).add_to(m)
-
-# Script Leaflet para dibujar ÚNICAMENTE la trayectoria de la aeronave seleccionada al hacer clic
-map_var = m.get_name()
-highlight_route_js = f"""
-<script>
-document.addEventListener("DOMContentLoaded", function() {{
-    var checkMap = setInterval(function() {{
-        var mapObj = window["{map_var}"];
-        if (mapObj) {{
-            clearInterval(checkMap);
-            var activeRouteLayer = null;
-
-            mapObj.on('popupopen', function(e) {{
-                if (activeRouteLayer) {{
-                    mapObj.removeLayer(activeRouteLayer);
-                    activeRouteLayer = null;
-                }}
-                var contentEl = e.popup.getElement();
-                if (!contentEl) return;
-                var dataDiv = contentEl.querySelector('.flight-popup-data');
-                if (dataDiv) {{
-                    try {{
-                        var coords = JSON.parse(dataDiv.getAttribute('data-coords'));
-                        if (coords && coords.length > 1) {{
-                            activeRouteLayer = L.polyline(coords, {{
-                                color: '#39FF14',
-                                weight: 3.0,
-                                opacity: 0.95,
-                                dashArray: '6, 4'
-                            }}).addTo(mapObj);
-                        }}
-                    }} catch (err) {{
-                        console.error("Error dibujando trayectoria:", err);
-                    }}
-                }}
-            }});
-
-            mapObj.on('popupclose', function(e) {{
-                if (activeRouteLayer) {{
-                    mapObj.removeLayer(activeRouteLayer);
-                    activeRouteLayer = null;
-                }}
-            }});
-        }}
-    }}, 200);
-}});
-</script>
-"""
-m.get_root().html.add_child(folium.Element(highlight_route_js))
 
 folium.LayerControl().add_to(m)
 st_folium(m, width=1400, height=750, returned_objects=[])
